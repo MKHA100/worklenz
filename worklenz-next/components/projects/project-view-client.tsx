@@ -1,18 +1,20 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Tabs, Table, Tag, Button, Modal, Form, Input, Select, Space,
   Typography, Flex, Drawer, Descriptions, Divider, Progress,
-  Avatar, Tooltip, Badge, App, Card, Empty, Statistic
+  Avatar, Tooltip, Badge, App, Card, Empty, Statistic, Upload
 } from "antd";
 import {
   PlusOutlined, UnorderedListOutlined, AppstoreOutlined,
   TeamOutlined, UserOutlined, ClockCircleOutlined,
   CheckOutlined, RollbackOutlined, StopOutlined, PauseOutlined,
-  PlayCircleOutlined, PauseCircleOutlined
+  PlayCircleOutlined, PauseCircleOutlined, UploadOutlined,
+  PaperClipOutlined, DeleteOutlined
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
+import type { UploadFile, UploadProps } from "antd/es/upload";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -24,97 +26,132 @@ const STATUS_COLORS: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   ASSIGNED: "Assigned", IN_PROGRESS: "In Progress", SUBMITTED: "Submitted",
   REVISION_REQUIRED: "Revision Required", ON_HOLD: "On Hold",
-  APPROVED: "Approved", REJECTED: "Rejected",
+  APPROVED: "Approved", Rejected: "Rejected", REJECTED: "Rejected",
   QUERY_RAISED: "Query Raised", EXTENSION_REQUESTED: "Extension Requested"
 };
 
-const ALL_STATUSES = Object.keys(STATUS_LABELS);
+const ALL_STATUSES = ["ASSIGNED", "IN_PROGRESS", "QUERY_RAISED", "EXTENSION_REQUESTED",
+  "SUBMITTED", "APPROVED", "REVISION_REQUIRED", "REJECTED", "ON_HOLD"];
 const KANBAN_COLS = ["ASSIGNED", "IN_PROGRESS", "SUBMITTED", "REVISION_REQUIRED", "ON_HOLD", "APPROVED", "REJECTED"];
+const REVIEWER_ROLES = ["owner", "admin", "managing_director", "senior_qs"];
+const QS_SUBMITTABLE = ["ASSIGNED", "IN_PROGRESS", "REVISION_REQUIRED"];
 
+type Attachment = { id: string; fileKey: string; fileName: string; mimeType: string | null; fileSize: number | null; createdAt: string };
 type Assignee = { id: string; fullName: string | null; email: string } | null;
 
 type Task = {
   id: string; title: string; description: string | null; status: string;
-  projectId: string; assigneeId: string | null; reviewComment: string | null;
+  projectId: string; assigneeId: string | null; reviewerId: string | null;
+  submissionNote: string | null; reviewComment: string | null;
   reviewOutcome: string | null; submittedAt: string | null; reviewedAt: string | null;
   revisionCount: number; timeSpentMinute: number; plannedRate: number | null;
   actualRate: number | null; efficiency: number | null; variance: number | null;
   unit: string | null; tradeCode: string | null;
   createdAt: string; updatedAt: string; assignee: Assignee;
+  attachments: Attachment[];
 };
 
 type Member = { id: string; fullName: string | null; email: string; role: string };
 
 type Props = {
+  currentUserId: string;
+  userRole: string;
   project: { id: string; name: string; code: string; officeName: string | null };
   initialTasks: Task[];
   members: Member[];
+  seniors: Member[];
 };
 
-export function ProjectViewClient({ project, initialTasks, members }: Props) {
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+export function ProjectViewClient({ currentUserId, userRole, project, initialTasks, members, seniors }: Props) {
   const { message } = App.useApp();
+  const isReviewer = REVIEWER_ROLES.includes(userRole);
+
+  const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [reviewComment, setReviewComment] = useState("");
+  const [submissionNote, setSubmissionNote] = useState("");
+  const [selectedReviewerId, setSelectedReviewerId] = useState<string | undefined>(undefined);
+  const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
 
-  // Timer state
+  // File upload state
+  const [fileList, setFileList] = useState<UploadFile[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+
+  // ---------------------------------------------------------------------------
+  // Timer — key insight: timerSessionSec tracks ONLY new seconds this session.
+  // Display = task.timeSpentMinute * 60 + timerSessionSec
+  // timerTaskId tracks which task is being timed, independently of which drawer is open.
+  // Opening the same task again does NOT reset the timer.
+  // ---------------------------------------------------------------------------
   const [timerRunning, setTimerRunning] = useState(false);
-  const [timerSeconds, setTimerSeconds] = useState(0);
+  const [timerTaskId, setTimerTaskId] = useState<string | null>(null);
+  const [timerSessionSec, setTimerSessionSec] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const timerStartRef = useRef<Date | null>(null);
+
+  // Stable ref to always have fresh timerSessionSec in stopTimer closure
+  const timerSessionSecRef = useRef(0);
+  useEffect(() => { timerSessionSecRef.current = timerSessionSec; }, [timerSessionSec]);
 
   useEffect(() => {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, []);
 
-  function startTimer() {
-    if (!selectedTask) return;
-    // Resume from saved accumulated time
-    const baseSeconds = selectedTask.timeSpentMinute * 60;
-    timerStartRef.current = new Date();
-    setTimerSeconds(baseSeconds);
+  function startTimer(task: Task) {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setTimerTaskId(task.id);
+    setTimerSessionSec(0);
+    timerSessionSecRef.current = 0;
     setTimerRunning(true);
     timerRef.current = setInterval(() => {
-      setTimerSeconds((s) => s + 1);
+      setTimerSessionSec((s) => s + 1);
     }, 1000);
   }
 
-  async function stopTimer() {
+  const stopTimer = useCallback(async (task: Task) => {
     if (timerRef.current) clearInterval(timerRef.current);
     setTimerRunning(false);
-    if (!selectedTask || !timerStartRef.current) return;
-    // Elapsed = current display seconds minus the base seconds we started from
-    const baseSeconds = selectedTask.timeSpentMinute * 60;
-    const elapsedSeconds = timerSeconds - baseSeconds;
-    const elapsed = Math.round(elapsedSeconds / 60);
-    if (elapsed < 1) { message.warning("Minimum 1 minute to log"); return; }
-    try {
-      const newMinutes = selectedTask.timeSpentMinute + elapsed;
-      await patchTask(selectedTask.id, { timeSpentMinute: newMinutes });
-      message.success(`Logged ${elapsed} minute${elapsed > 1 ? "s" : ""}`);
-    } catch { message.error("Failed to log time"); }
-  }
+    setTimerTaskId(null);
 
-  function formatTimer(s: number) {
-    const h = Math.floor(s / 3600).toString().padStart(2, "0");
-    const m = Math.floor((s % 3600) / 60).toString().padStart(2, "0");
-    const sec = (s % 60).toString().padStart(2, "0");
-    return `${h}:${m}:${sec}`;
+    const elapsed = Math.round(timerSessionSecRef.current / 60);
+    if (elapsed < 1) { message.warning("Minimum 1 minute to log"); setTimerSessionSec(0); return; }
+
+    try {
+      const newMinutes = task.timeSpentMinute + elapsed;
+      await patchTask(task.id, { timeSpentMinute: newMinutes });
+      message.success(`Logged ${elapsed} minute${elapsed !== 1 ? "s" : ""}`);
+      setTimerSessionSec(0);
+    } catch { message.error("Failed to log time"); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function formatTimer(task: Task | null) {
+    const base = (task?.timeSpentMinute ?? 0) * 60;
+    const total = base + (timerTaskId === task?.id ? timerSessionSec : 0);
+    const h = Math.floor(total / 3600).toString().padStart(2, "0");
+    const m = Math.floor((total % 3600) / 60).toString().padStart(2, "0");
+    const s = (total % 60).toString().padStart(2, "0");
+    return `${h}:${m}:${s}`;
   }
 
   function openTask(task: Task) {
-    // Stop any running timer before switching tasks
-    if (timerRef.current) clearInterval(timerRef.current);
-    setTimerRunning(false);
-    timerStartRef.current = null;
-    // Initialize display to task's accumulated time
-    setTimerSeconds(task.timeSpentMinute * 60);
+    // If timer is running for a DIFFERENT task: stop it (don't save — user chose to switch)
+    if (timerRunning && timerTaskId !== task.id) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      setTimerRunning(false);
+      setTimerTaskId(null);
+      setTimerSessionSec(0);
+      message.warning("Timer stopped — switch task without saving");
+    }
+    // DON'T reset timer state if same task — timer keeps running across close/reopen
     setSelectedTask(task);
     setReviewComment(task.reviewComment ?? "");
+    setSubmissionNote(task.submissionNote ?? "");
+    setSelectedReviewerId(task.reviewerId ?? undefined);
+    setFileList([]);
     setDrawerOpen(true);
   }
 
@@ -127,7 +164,7 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
     if (!res.ok) throw new Error("Update failed");
     const { task } = await res.json();
     setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, ...task } : t)));
-    if (selectedTask?.id === taskId) setSelectedTask((prev) => prev ? { ...prev, ...task } : null);
+    setSelectedTask((prev) => (prev?.id === taskId ? { ...prev, ...task } : prev));
     return task;
   }
 
@@ -148,6 +185,76 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
     } catch { message.error("Action failed"); }
   }
 
+  // Upload a single file to R2 via the sign endpoint
+  async function uploadFileToR2(file: File, taskId: string): Promise<{ fileKey: string; fileName: string; mimeType: string; fileSize: number }> {
+    const ext = file.name.split(".").pop() ?? "";
+    const fileKey = `tasks/${taskId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+    const signRes = await fetch("/api/files/sign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: fileKey, mode: "upload", expiresInSeconds: 300 })
+    });
+    if (!signRes.ok) throw new Error("Failed to get upload URL");
+    const { url } = await signRes.json() as { url: string };
+
+    const putRes = await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file
+    });
+    if (!putRes.ok) throw new Error("Upload failed");
+
+    return { fileKey, fileName: file.name, mimeType: file.type, fileSize: file.size };
+  }
+
+  async function handleSubmitForReview() {
+    if (!selectedTask) return;
+    setSubmitting(true);
+    setUploadingFiles(true);
+
+    try {
+      // 1. Upload all pending files to R2 and create attachment records
+      const pendingFiles = fileList.filter((f) => f.originFileObj);
+      for (const uf of pendingFiles) {
+        const file = uf.originFileObj as File;
+        const uploaded = await uploadFileToR2(file, selectedTask.id);
+        const attRes = await fetch(`/api/tasks/${selectedTask.id}/attachments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(uploaded)
+        });
+        if (!attRes.ok) throw new Error("Failed to save attachment record");
+        const { attachment } = await attRes.json() as { attachment: Attachment };
+        // Optimistically add attachment to task
+        setSelectedTask((prev) => prev ? { ...prev, attachments: [...prev.attachments, attachment] } : prev);
+        setTasks((prev) => prev.map((t) => t.id === selectedTask.id
+          ? { ...t, attachments: [...t.attachments, attachment] } : t));
+      }
+
+      // 2. Submit the task
+      const submitRes = await fetch(`/api/jcc/tasks/${selectedTask.id}/submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ submissionNote, reviewerId: selectedReviewerId ?? null })
+      });
+      if (!submitRes.ok) {
+        const err = await submitRes.json() as { error: string };
+        throw new Error(err.error ?? "Submit failed");
+      }
+      const { task } = await submitRes.json() as { task: Task };
+      setTasks((prev) => prev.map((t) => t.id === selectedTask.id ? { ...t, ...task } : t));
+      setSelectedTask((prev) => prev ? { ...prev, ...task } : prev);
+      message.success("Submitted for review");
+      setFileList([]);
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : "Submit failed");
+    } finally {
+      setSubmitting(false);
+      setUploadingFiles(false);
+    }
+  }
+
   async function handleCreate(values: { title: string; assigneeId?: string; status?: string; tradeCode?: string }) {
     setCreating(true);
     try {
@@ -157,11 +264,12 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
         body: JSON.stringify({ ...values, projectId: project.id, status: values.status ?? "ASSIGNED" })
       });
       if (!res.ok) throw new Error("Create failed");
-      const { task } = await res.json();
+      const { task } = await res.json() as { task: Task };
       const assignee = members.find((m) => m.id === task.assigneeId) ?? null;
       setTasks((prev) => [{
         ...task, assignee: assignee ? { id: assignee.id, fullName: assignee.fullName, email: assignee.email } : null,
-        submittedAt: null, reviewedAt: null, reviewComment: null, reviewOutcome: null,
+        attachments: [], submittedAt: null, reviewedAt: null, reviewComment: null,
+        reviewOutcome: null, submissionNote: null, reviewerId: null,
         revisionCount: 0, timeSpentMinute: 0, plannedRate: null, actualRate: null,
         efficiency: null, variance: null, unit: null, tradeCode: null
       }, ...prev]);
@@ -172,15 +280,46 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
     finally { setCreating(false); }
   }
 
+  async function handleDeleteAttachment(taskId: string, attachmentId: string) {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/attachments?id=${attachmentId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      setSelectedTask((prev) => prev ? { ...prev, attachments: prev.attachments.filter((a) => a.id !== attachmentId) } : prev);
+      setTasks((prev) => prev.map((t) => t.id === taskId
+        ? { ...t, attachments: t.attachments.filter((a) => a.id !== attachmentId) } : t));
+    } catch { message.error("Failed to delete attachment"); }
+  }
+
+  const uploadProps: UploadProps = {
+    fileList,
+    beforeUpload: () => false, // manual upload on submit
+    onChange: ({ fileList: fl }) => setFileList(fl),
+    multiple: true,
+    maxCount: 10,
+    showUploadList: false
+  };
+
   // Task list columns
   const taskColumns: ColumnsType<Task> = [
     {
       title: "Title", dataIndex: "title", key: "title",
       render: (title, record) => (
-        <button onClick={() => openTask(record)}
-          style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 500, fontSize: 14, color: "#262626", textAlign: "left", padding: 0 }}>
-          {title}
-        </button>
+        <Flex gap={6} align="center">
+          <button onClick={() => openTask(record)}
+            style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 500, fontSize: 14, color: "#262626", textAlign: "left", padding: 0 }}>
+            {title}
+          </button>
+          {record.attachments.length > 0 && (
+            <Tooltip title={`${record.attachments.length} attachment${record.attachments.length > 1 ? "s" : ""}`}>
+              <PaperClipOutlined style={{ color: "#8c8c8c", fontSize: 13 }} />
+            </Tooltip>
+          )}
+          {timerRunning && timerTaskId === record.id && (
+            <Tooltip title="Timer running">
+              <ClockCircleOutlined style={{ color: "#1677ff", fontSize: 12 }} />
+            </Tooltip>
+          )}
+        </Flex>
       )
     },
     {
@@ -206,15 +345,14 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
       }
     },
     {
-      title: "Revisions", dataIndex: "revisionCount", key: "revisions", width: 100,
+      title: "Revisions", dataIndex: "revisionCount", key: "revisions", width: 90,
       render: (n: number) => n > 0 ? <Badge count={n} color="orange" /> : <Text type="secondary">—</Text>
     },
     {
       title: "", key: "actions", width: 120,
       render: (_, record) => (
         <Select
-          size="small"
-          value={record.status}
+          size="small" value={record.status}
           onChange={(v) => handleStatusChange(record.id, v)}
           style={{ width: 100 }}
           options={ALL_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))}
@@ -226,6 +364,9 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
 
   const approved = tasks.filter((t) => t.status === "APPROVED").length;
   const completion = tasks.length > 0 ? Math.round((approved / tasks.length) * 100) : 0;
+
+  const isTimerActiveForSelected = timerRunning && timerTaskId === selectedTask?.id;
+  const timerDisabled = selectedTask ? ["APPROVED", "REJECTED", "SUBMITTED"].includes(selectedTask.status) : false;
 
   return (
     <div>
@@ -248,110 +389,98 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
         </Button>
       </Flex>
 
-      {/* Tabs */}
-      <Tabs
-        defaultActiveKey="list"
-        items={[
-          {
-            key: "list", label: <span><UnorderedListOutlined /> Task List</span>,
-            children: (
-              <Table
-                dataSource={tasks} columns={taskColumns} rowKey="id"
-                pagination={{ pageSize: 20, showTotal: (t) => `${t} tasks` }}
-                onRow={(r) => ({ onClick: () => openTask(r) })}
-                size="middle"
-                style={{ cursor: "pointer" }}
-              />
-            )
-          },
-          {
-            key: "board", label: <span><AppstoreOutlined /> Board</span>,
-            children: (
-              <div style={{ overflowX: "auto" }}>
-                <Flex gap={12} style={{ minWidth: 900, padding: "8px 0" }}>
-                  {KANBAN_COLS.map((col) => {
-                    const colTasks = tasks.filter((t) => t.status === col);
-                    return (
-                      <div key={col} style={{ flex: "0 0 220px", background: "#f5f5f5", borderRadius: 8, padding: 12 }}>
-                        <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
-                          <Text strong style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                            {STATUS_LABELS[col]}
-                          </Text>
-                          <Badge count={colTasks.length} color={STATUS_COLORS[col] === "default" ? "#8c8c8c" : undefined} />
-                        </Flex>
-                        <Flex vertical gap={8}>
-                          {colTasks.length === 0 && (
-                            <Empty description="" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: "8px 0" }} />
-                          )}
-                          {colTasks.map((t) => (
-                            <Card
-                              key={t.id} size="small" hoverable
-                              onClick={() => openTask(t)}
-                              style={{ borderRadius: 6, cursor: "pointer" }}
-                            >
-                              <Text style={{ fontSize: 13, fontWeight: 500 }}>{t.title}</Text>
-                              {t.assignee && (
-                                <Flex gap={4} align="center" style={{ marginTop: 6 }}>
-                                  <Avatar size={16} icon={<UserOutlined />} style={{ fontSize: 10, background: "#1677ff" }} />
-                                  <Text type="secondary" style={{ fontSize: 11 }}>
-                                    {t.assignee.fullName ?? t.assignee.email}
-                                  </Text>
-                                </Flex>
-                              )}
-                              {t.revisionCount > 0 && (
-                                <Tag color="orange" style={{ fontSize: 10, marginTop: 4 }}>
-                                  {t.revisionCount} revision{t.revisionCount > 1 ? "s" : ""}
-                                </Tag>
-                              )}
-                            </Card>
-                          ))}
-                        </Flex>
-                      </div>
-                    );
-                  })}
-                </Flex>
-              </div>
-            )
-          },
-          {
-            key: "members", label: <span><TeamOutlined /> Members</span>,
-            children: (
-              <Table
-                dataSource={members} rowKey="id" size="middle"
-                pagination={false}
-                columns={[
-                  {
-                    title: "Member", key: "name",
-                    render: (_, m) => (
-                      <Flex gap={10} align="center">
-                        <Avatar icon={<UserOutlined />} style={{ background: "#1677ff" }} />
-                        <div>
-                          <Text strong style={{ fontSize: 14 }}>{m.fullName ?? "—"}</Text>
-                          <br />
-                          <Text type="secondary" style={{ fontSize: 12 }}>{m.email}</Text>
-                        </div>
+      <Tabs defaultActiveKey="list" items={[
+        {
+          key: "list", label: <span><UnorderedListOutlined /> Task List</span>,
+          children: (
+            <Table
+              dataSource={tasks} columns={taskColumns} rowKey="id"
+              pagination={{ pageSize: 20, showTotal: (t) => `${t} tasks` }}
+              onRow={(r) => ({ onClick: () => openTask(r) })}
+              size="middle" style={{ cursor: "pointer" }}
+            />
+          )
+        },
+        {
+          key: "board", label: <span><AppstoreOutlined /> Board</span>,
+          children: (
+            <div style={{ overflowX: "auto" }}>
+              <Flex gap={12} style={{ minWidth: 900, padding: "8px 0" }}>
+                {KANBAN_COLS.map((col) => {
+                  const colTasks = tasks.filter((t) => t.status === col);
+                  return (
+                    <div key={col} style={{ flex: "0 0 220px", background: "#f5f5f5", borderRadius: 8, padding: 12 }}>
+                      <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
+                        <Text strong style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          {STATUS_LABELS[col]}
+                        </Text>
+                        <Badge count={colTasks.length} color={STATUS_COLORS[col] === "default" ? "#8c8c8c" : undefined} />
                       </Flex>
-                    )
-                  },
-                  {
-                    title: "Role", dataIndex: "role", key: "role", width: 160,
-                    render: (role: string) => <Tag style={{ textTransform: "capitalize" }}>{role.replace("_", " ")}</Tag>
-                  },
-                  {
-                    title: "Tasks", key: "tasks", width: 120,
-                    render: (_, m) => {
-                      const count = tasks.filter((t) => t.assigneeId === m.id).length;
-                      return <Tag color={count > 0 ? "blue" : "default"}>{count} tasks</Tag>;
-                    }
+                      <Flex vertical gap={8}>
+                        {colTasks.length === 0 && <Empty description="" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: "8px 0" }} />}
+                        {colTasks.map((t) => (
+                          <Card key={t.id} size="small" hoverable onClick={() => openTask(t)} style={{ borderRadius: 6, cursor: "pointer" }}>
+                            <Text style={{ fontSize: 13, fontWeight: 500 }}>{t.title}</Text>
+                            {t.assignee && (
+                              <Flex gap={4} align="center" style={{ marginTop: 6 }}>
+                                <Avatar size={16} icon={<UserOutlined />} style={{ fontSize: 10, background: "#1677ff" }} />
+                                <Text type="secondary" style={{ fontSize: 11 }}>{t.assignee.fullName ?? t.assignee.email}</Text>
+                              </Flex>
+                            )}
+                            <Flex gap={4} wrap style={{ marginTop: 4 }}>
+                              {t.revisionCount > 0 && <Tag color="orange" style={{ fontSize: 10 }}>{t.revisionCount} rev</Tag>}
+                              {t.attachments.length > 0 && <Tag icon={<PaperClipOutlined />} style={{ fontSize: 10 }}>{t.attachments.length}</Tag>}
+                              {timerRunning && timerTaskId === t.id && <Tag color="blue" style={{ fontSize: 10 }}>⏱</Tag>}
+                            </Flex>
+                          </Card>
+                        ))}
+                      </Flex>
+                    </div>
+                  );
+                })}
+              </Flex>
+            </div>
+          )
+        },
+        {
+          key: "members", label: <span><TeamOutlined /> Members</span>,
+          children: (
+            <Table
+              dataSource={members} rowKey="id" size="middle" pagination={false}
+              columns={[
+                {
+                  title: "Member", key: "name",
+                  render: (_, m) => (
+                    <Flex gap={10} align="center">
+                      <Avatar icon={<UserOutlined />} style={{ background: "#1677ff" }} />
+                      <div>
+                        <Text strong style={{ fontSize: 14 }}>{m.fullName ?? "—"}</Text>
+                        <br />
+                        <Text type="secondary" style={{ fontSize: 12 }}>{m.email}</Text>
+                      </div>
+                    </Flex>
+                  )
+                },
+                {
+                  title: "Role", dataIndex: "role", key: "role", width: 160,
+                  render: (role: string) => <Tag style={{ textTransform: "capitalize" }}>{role.replace(/_/g, " ")}</Tag>
+                },
+                {
+                  title: "Tasks", key: "tasks", width: 120,
+                  render: (_, m) => {
+                    const count = tasks.filter((t) => t.assigneeId === m.id).length;
+                    return <Tag color={count > 0 ? "blue" : "default"}>{count} tasks</Tag>;
                   }
-                ]}
-              />
-            )
-          }
-        ]}
-      />
+                }
+              ]}
+            />
+          )
+        }
+      ]} />
 
-      {/* Task Drawer */}
+      {/* ------------------------------------------------------------------ */}
+      {/* Task Drawer                                                          */}
+      {/* ------------------------------------------------------------------ */}
       <Drawer
         title={
           <Flex gap={8} align="center">
@@ -362,13 +491,13 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         size="default"
-        styles={{ wrapper: { width: 520 } }}
+        styles={{ wrapper: { width: 540 } }}
         extra={
           selectedTask && (
             <Select
               value={selectedTask.status}
               onChange={(v) => handleStatusChange(selectedTask.id, v)}
-              style={{ width: 160 }}
+              style={{ width: 170 }}
               options={ALL_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))}
             />
           )
@@ -376,19 +505,19 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
       >
         {selectedTask && (
           <div>
+            {/* Description */}
             {selectedTask.description && (
               <>
-                <Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase" }}>Description</Text>
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Description</Text>
                 <Paragraph style={{ marginTop: 4 }}>{selectedTask.description}</Paragraph>
                 <Divider />
               </>
             )}
 
-            <Descriptions column={1} size="small" style={{ marginBottom: 16 }}>
+            {/* Meta */}
+            <Descriptions column={1} size="small" style={{ marginBottom: 12 }}>
               <Descriptions.Item label="Assignee">
-                {selectedTask.assignee
-                  ? (selectedTask.assignee.fullName ?? selectedTask.assignee.email)
-                  : "Unassigned"}
+                {selectedTask.assignee ? (selectedTask.assignee.fullName ?? selectedTask.assignee.email) : "Unassigned"}
               </Descriptions.Item>
               <Descriptions.Item label="Trade Code">{selectedTask.tradeCode ?? "—"}</Descriptions.Item>
               <Descriptions.Item label="Unit">{selectedTask.unit ?? "—"}</Descriptions.Item>
@@ -398,33 +527,25 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
               <Descriptions.Item label="Revisions">{selectedTask.revisionCount}</Descriptions.Item>
             </Descriptions>
 
-            {/* Time tracker */}
+            {/* ---- Time Tracker (always visible) ---- */}
             <Divider />
-            <Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase" }}>Time Tracker</Text>
-            <Card
-              size="small"
-              style={{ marginTop: 8, background: timerRunning ? "#f0f9ff" : "#fafafa", borderRadius: 8 }}
-            >
+            <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Time Tracker</Text>
+            <Card size="small" style={{ marginTop: 8, background: isTimerActiveForSelected ? "#f0f9ff" : "#fafafa", borderRadius: 8 }}>
               <Flex justify="space-between" align="center">
                 <Statistic
-                  value={formatTimer(timerSeconds)}
-                  prefix={<ClockCircleOutlined style={{ color: timerRunning ? "#1677ff" : "#8c8c8c" }} />}
-                  styles={{ content: { fontSize: 22, fontFamily: "monospace", color: timerRunning ? "#1677ff" : "#595959" } }}
+                  value={formatTimer(selectedTask)}
+                  prefix={<ClockCircleOutlined style={{ color: isTimerActiveForSelected ? "#1677ff" : "#8c8c8c" }} />}
+                  styles={{ content: { fontSize: 22, fontFamily: "monospace", color: isTimerActiveForSelected ? "#1677ff" : "#595959" } }}
                 />
                 <Space>
-                  {!timerRunning ? (
+                  {!isTimerActiveForSelected ? (
                     <Button
                       type="primary" icon={<PlayCircleOutlined />}
-                      onClick={startTimer}
-                      disabled={["APPROVED", "REJECTED", "SUBMITTED"].includes(selectedTask.status)}
-                    >
-                      Start
-                    </Button>
+                      onClick={() => startTimer(selectedTask)}
+                      disabled={timerDisabled}
+                    >Start</Button>
                   ) : (
-                    <Button
-                      danger icon={<PauseCircleOutlined />}
-                      onClick={stopTimer}
-                    >
+                    <Button danger icon={<PauseCircleOutlined />} onClick={() => stopTimer(selectedTask)}>
                       Stop & Log
                     </Button>
                   )}
@@ -432,7 +553,173 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
               </Flex>
             </Card>
 
-            <Descriptions column={1} size="small" style={{ marginTop: 12 }}>
+            {/* ---- Existing attachments ---- */}
+            {selectedTask.attachments.length > 0 && (
+              <>
+                <Divider />
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Attachments</Text>
+                <Flex vertical gap={6} style={{ marginTop: 8 }}>
+                  {selectedTask.attachments.map((att) => (
+                    <Flex key={att.id} justify="space-between" align="center"
+                      style={{ background: "#fafafa", padding: "6px 10px", borderRadius: 6, border: "1px solid #f0f0f0" }}>
+                      <Flex gap={6} align="center">
+                        <PaperClipOutlined style={{ color: "#8c8c8c" }} />
+                        <Text style={{ fontSize: 13 }}>{att.fileName}</Text>
+                        {att.fileSize && (
+                          <Text type="secondary" style={{ fontSize: 11 }}>
+                            ({(att.fileSize / 1024).toFixed(0)} KB)
+                          </Text>
+                        )}
+                      </Flex>
+                      {selectedTask.status !== "SUBMITTED" && selectedTask.status !== "APPROVED" && (
+                        <Button
+                          type="text" size="small" danger icon={<DeleteOutlined />}
+                          onClick={() => handleDeleteAttachment(selectedTask.id, att.id)}
+                        />
+                      )}
+                    </Flex>
+                  ))}
+                </Flex>
+              </>
+            )}
+
+            {/* ---- Submission note (read-only once submitted) ---- */}
+            {selectedTask.submissionNote && (
+              <>
+                <Divider />
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Submission Note</Text>
+                <Paragraph style={{ marginTop: 4, background: "#f6ffed", padding: 10, borderRadius: 6, fontSize: 13 }}>
+                  {selectedTask.submissionNote}
+                </Paragraph>
+              </>
+            )}
+
+            {/* ---- Review comment (visible to all once set) ---- */}
+            {selectedTask.reviewComment && (
+              <>
+                <Divider />
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Review Comment</Text>
+                <Paragraph style={{ marginTop: 4, background: "#fff7e6", padding: 10, borderRadius: 6, fontSize: 13 }}>
+                  {selectedTask.reviewComment}
+                </Paragraph>
+              </>
+            )}
+
+            {/* ================================================================
+                QS PANEL — submit form (only when not submitted/approved/rejected)
+                Only for non-reviewer roles, and only for submittable statuses.
+                ================================================================ */}
+            {!isReviewer && QS_SUBMITTABLE.includes(selectedTask.status) && (
+              <>
+                <Divider />
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  Submit for Review
+                </Text>
+
+                {/* Reviewer selector */}
+                <div style={{ marginTop: 10 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Assign Reviewer (optional — if blank, all seniors can review)</Text>
+                  <Select
+                    style={{ width: "100%", marginTop: 4 }}
+                    placeholder="Any available senior reviewer"
+                    allowClear
+                    value={selectedReviewerId}
+                    onChange={setSelectedReviewerId}
+                    options={seniors.map((s) => ({
+                      value: s.id,
+                      label: `${s.fullName ?? s.email} (${s.role.replace(/_/g, " ")})`
+                    }))}
+                  />
+                </div>
+
+                {/* Submission note */}
+                <div style={{ marginTop: 10 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Submission Notes</Text>
+                  <Input.TextArea
+                    style={{ marginTop: 4 }}
+                    rows={3}
+                    placeholder="Describe what was completed, any assumptions, drawing refs..."
+                    value={submissionNote}
+                    onChange={(e) => setSubmissionNote(e.target.value)}
+                  />
+                </div>
+
+                {/* File upload */}
+                <div style={{ marginTop: 10 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Attach Documents</Text>
+                  <Upload {...uploadProps} style={{ marginTop: 4 }}>
+                    <Button icon={<UploadOutlined />} style={{ marginTop: 4, width: "100%" }}>
+                      Select Files
+                    </Button>
+                  </Upload>
+                  {fileList.length > 0 && (
+                    <Flex vertical gap={4} style={{ marginTop: 8 }}>
+                      {fileList.map((f) => (
+                        <Flex key={f.uid} justify="space-between" align="center"
+                          style={{ background: "#f5f5f5", padding: "4px 8px", borderRadius: 4, fontSize: 12 }}>
+                          <Flex gap={6} align="center">
+                            <PaperClipOutlined />
+                            <Text style={{ fontSize: 12 }}>{f.name}</Text>
+                          </Flex>
+                          <Button
+                            type="text" size="small" danger icon={<DeleteOutlined />}
+                            onClick={() => setFileList((prev) => prev.filter((x) => x.uid !== f.uid))}
+                          />
+                        </Flex>
+                      ))}
+                    </Flex>
+                  )}
+                </div>
+
+                {/* Submit button */}
+                <Button
+                  type="primary" block
+                  style={{ marginTop: 16 }}
+                  loading={submitting || uploadingFiles}
+                  onClick={handleSubmitForReview}
+                >
+                  {fileList.length > 0 ? `Upload ${fileList.length} file${fileList.length > 1 ? "s" : ""} & Submit` : "Submit for Review"}
+                </Button>
+              </>
+            )}
+
+            {/* ================================================================
+                REVIEWER PANEL — review actions (only for senior_qs and above)
+                Only shown when task is SUBMITTED.
+                ================================================================ */}
+            {isReviewer && selectedTask.status === "SUBMITTED" && (
+              <>
+                <Divider />
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Review Actions</Text>
+                <div style={{ marginTop: 8 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Review Comment</Text>
+                  <Input.TextArea
+                    style={{ marginTop: 4 }}
+                    value={reviewComment}
+                    onChange={(e) => setReviewComment(e.target.value)}
+                    placeholder="Add review comment..."
+                    rows={3}
+                  />
+                </div>
+                <Space wrap style={{ marginTop: 12 }}>
+                  <Button
+                    type="primary" icon={<CheckOutlined />}
+                    onClick={() => handleReviewAction("approve")}
+                    style={{ background: "#52c41a", borderColor: "#52c41a" }}
+                  >Approve</Button>
+                  <Button
+                    icon={<RollbackOutlined />}
+                    onClick={() => handleReviewAction("revision")}
+                    style={{ color: "#fa8c16", borderColor: "#fa8c16" }}
+                  >Revision</Button>
+                  <Button icon={<PauseOutlined />} onClick={() => handleReviewAction("on_hold")}>On Hold</Button>
+                  <Button danger icon={<StopOutlined />} onClick={() => handleReviewAction("reject")}>Reject</Button>
+                </Space>
+              </>
+            )}
+
+            {/* Extra metadata */}
+            <Descriptions column={1} size="small" style={{ marginTop: 16 }}>
               {selectedTask.submittedAt && (
                 <Descriptions.Item label="Submitted">
                   {new Date(selectedTask.submittedAt).toLocaleDateString()}
@@ -449,65 +736,6 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
                 </Descriptions.Item>
               )}
             </Descriptions>
-
-            {selectedTask.reviewComment && (
-              <>
-                <Divider />
-                <Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase" }}>Review Comment</Text>
-                <Paragraph style={{ marginTop: 4, background: "#fff7e6", padding: 12, borderRadius: 6 }}>
-                  {selectedTask.reviewComment}
-                </Paragraph>
-              </>
-            )}
-
-            {/* Review actions for submitted tasks */}
-            {selectedTask.status === "SUBMITTED" && (
-              <>
-                <Divider />
-                <Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase" }}>Review Actions</Text>
-                <Form.Item label="Comment" style={{ marginTop: 8 }}>
-                  <Input.TextArea
-                    value={reviewComment}
-                    onChange={(e) => setReviewComment(e.target.value)}
-                    placeholder="Add review comment..."
-                    rows={3}
-                  />
-                </Form.Item>
-                <Space wrap>
-                  <Button
-                    type="primary" icon={<CheckOutlined />}
-                    onClick={() => handleReviewAction("approve")}
-                    style={{ background: "#52c41a", borderColor: "#52c41a" }}
-                  >Approve</Button>
-                  <Button
-                    icon={<RollbackOutlined />}
-                    onClick={() => handleReviewAction("revision")}
-                    style={{ color: "#fa8c16", borderColor: "#fa8c16" }}
-                  >Revision</Button>
-                  <Button
-                    icon={<PauseOutlined />}
-                    onClick={() => handleReviewAction("on_hold")}
-                  >On Hold</Button>
-                  <Button
-                    danger icon={<StopOutlined />}
-                    onClick={() => handleReviewAction("reject")}
-                  >Reject</Button>
-                </Space>
-              </>
-            )}
-
-            {/* Submit for review */}
-            {["ASSIGNED", "IN_PROGRESS", "REVISION_REQUIRED"].includes(selectedTask.status) && (
-              <>
-                <Divider />
-                <Button
-                  type="primary" block
-                  onClick={() => handleStatusChange(selectedTask.id, "SUBMITTED")}
-                >
-                  Submit for Review
-                </Button>
-              </>
-            )}
           </div>
         )}
       </Drawer>
@@ -519,27 +747,17 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
             <Input placeholder="Describe the task..." />
           </Form.Item>
           <Form.Item name="assigneeId" label="Assign To">
-            <Select
-              placeholder="Select member"
-              allowClear
-              options={members.map((m) => ({
-                value: m.id,
-                label: m.fullName ?? m.email
-              }))}
-            />
+            <Select placeholder="Select member" allowClear
+              options={members.map((m) => ({ value: m.id, label: m.fullName ?? m.email }))} />
           </Form.Item>
           <Form.Item name="tradeCode" label="Trade Code">
-            <Select
-              placeholder="Select trade"
-              allowClear
-              options={[
-                { value: "QS", label: "Quantity Surveying" },
-                { value: "STRUCT", label: "Structural" },
-                { value: "MEP", label: "MEP" },
-                { value: "ARCH", label: "Architectural" },
-                { value: "CIVIL", label: "Civil" }
-              ]}
-            />
+            <Select placeholder="Select trade" allowClear options={[
+              { value: "QS", label: "Quantity Surveying" },
+              { value: "STRUCT", label: "Structural" },
+              { value: "MEP", label: "MEP" },
+              { value: "ARCH", label: "Architectural" },
+              { value: "CIVIL", label: "Civil" }
+            ]} />
           </Form.Item>
           <Form.Item name="status" label="Initial Status" initialValue="ASSIGNED">
             <Select options={ALL_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))} />

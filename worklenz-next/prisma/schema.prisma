@@ -22,6 +22,7 @@ model UserProfile {
   office             Office?       @relation(fields: [officeId], references: [id])
   customRole         Role?         @relation(fields: [roleId], references: [id])
   tasks              Task[]        @relation("TaskAssignee")
+  reviewTasks        Task[]        @relation("TaskReviewer")
   attendance         Attendance[]
   queryRaised        TaskQueryLog[] @relation("QueryRaisedBy")
   queryReplied       TaskQueryLog[] @relation("QueryRespondedBy")
@@ -54,6 +55,8 @@ model Task {
   unit            String?
   tradeCode       String?
   assigneeId      String?        @db.Uuid
+  reviewerId      String?        @db.Uuid
+  submissionNote  String?
   reviewComment   String?
   reviewOutcome   String?
   submittedAt     DateTime?
@@ -63,11 +66,26 @@ model Task {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
-  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  assignee      UserProfile?    @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee      UserProfile?     @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  reviewer      UserProfile?     @relation("TaskReviewer", fields: [reviewerId], references: [id])
   logs          TaskTimeLog[]
   queries       TaskQueryLog[]
+  attachments   TaskAttachment[]
   productivity  TaskProductivity?
+}
+
+model TaskAttachment {
+  id           String   @id @default(uuid()) @db.Uuid
+  taskId       String   @db.Uuid
+  fileKey      String
+  fileName     String
+  mimeType     String?
+  fileSize     Int?
+  uploadedById String?  @db.Uuid
+  createdAt    DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
 }
 
 model TaskTimeLog {

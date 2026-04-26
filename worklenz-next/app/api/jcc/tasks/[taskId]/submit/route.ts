@@ -3,33 +3,32 @@ import { prisma } from "@/lib/db/prisma";
 import { publishRealtimeEvent } from "@/lib/realtime/publish";
 import { requireUserProfile } from "@/lib/users/profile";
 
-type RouteContext = {
-  params: Promise<{ taskId: string }>;
-};
+type RouteContext = { params: Promise<{ taskId: string }> };
 
-export async function POST(_: Request, { params }: RouteContext) {
+const SUBMITTABLE_STATUSES = ["ASSIGNED", "IN_PROGRESS", "REVISION_REQUIRED"];
+
+export async function POST(req: Request, { params }: RouteContext) {
   const profile = await requireUserProfile();
-  if (!profile) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { taskId } = await params;
+  const body = await req.json().catch(() => ({})) as {
+    submissionNote?: string;
+    reviewerId?: string;
+  };
+
   const task = await prisma.task.findUnique({
     where: { id: taskId },
-    include: {
-      logs: { select: { minutes: true } }
-    }
+    include: { logs: { select: { minutes: true } } }
   });
 
-  if (!task) {
-    return NextResponse.json({ error: "Task not found" }, { status: 404 });
-  }
+  if (!task) return NextResponse.json({ error: "Task not found" }, { status: 404 });
 
   if (task.assigneeId !== profile.id) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  if (task.status !== "ASSIGNED" && task.status !== "REVISION_REQUIRED" && task.status !== "IN_PROGRESS") {
+  if (!SUBMITTABLE_STATUSES.includes(task.status)) {
     return NextResponse.json(
       { error: `Cannot submit task in status ${task.status}` },
       { status: 409 }
@@ -45,19 +44,17 @@ export async function POST(_: Request, { params }: RouteContext) {
     where: { id: taskId },
     data: {
       status: "SUBMITTED",
-      submittedAt: new Date()
+      submittedAt: new Date(),
+      submissionNote: body.submissionNote ?? null,
+      reviewerId: body.reviewerId ?? null
     }
   });
 
   await publishRealtimeEvent({
     channel: `project:${updated.projectId}`,
     event: "task.submitted",
-    payload: {
-      taskId: updated.id,
-      projectId: updated.projectId,
-      actorUserId: profile.id
-    }
+    payload: { taskId: updated.id, projectId: updated.projectId, actorUserId: profile.id }
   });
 
-  return NextResponse.json({ data: updated });
+  return NextResponse.json({ task: updated });
 }

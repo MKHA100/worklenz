@@ -28,9 +28,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
-  // Enforce per-user key namespace: key must start with users/{userId}/
-  const allowedPrefix = `users/${userId}/`;
-  if (!body.key.startsWith(allowedPrefix)) {
+  // Allowed namespaces:
+  //   users/{userId}/...  → personal files
+  //   tasks/{taskId}/...  → task attachments (any authenticated user; task-level ACL enforced in app layer)
+  const userPrefix = `users/${userId}/`;
+  const taskPrefix = "tasks/";
+  if (!body.key.startsWith(userPrefix) && !body.key.startsWith(taskPrefix)) {
     return NextResponse.json({ error: "Forbidden: key outside authorized namespace" }, { status: 403 });
   }
 

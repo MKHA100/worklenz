@@ -5,8 +5,12 @@ import { ProjectViewClient } from "@/components/projects/project-view-client";
 
 type Props = { params: Promise<{ projectId: string }> };
 
+const REVIEWER_ROLES = ["owner", "admin", "managing_director", "senior_qs"];
+
 export default async function ProjectPage({ params }: Props) {
-  await requireUserProfile();
+  const profile = await requireUserProfile();
+  if (!profile) notFound();
+
   const { projectId } = await params;
 
   const [project, rawTasks, members] = await Promise.all([
@@ -16,7 +20,10 @@ export default async function ProjectPage({ params }: Props) {
     }),
     prisma.task.findMany({
       where: { projectId },
-      include: { assignee: { select: { id: true, fullName: true, email: true } } },
+      include: {
+        assignee: { select: { id: true, fullName: true, email: true } },
+        attachments: { select: { id: true, fileKey: true, fileName: true, mimeType: true, fileSize: true, createdAt: true } }
+      },
       orderBy: { createdAt: "desc" }
     }),
     prisma.userProfile.findMany({
@@ -26,8 +33,12 @@ export default async function ProjectPage({ params }: Props) {
 
   if (!project) notFound();
 
+  const seniors = members.filter((m) => REVIEWER_ROLES.includes(m.role));
+
   return (
     <ProjectViewClient
+      currentUserId={profile.id}
+      userRole={profile.role}
       project={{
         id: project.id,
         name: project.name,
@@ -41,6 +52,8 @@ export default async function ProjectPage({ params }: Props) {
         status: t.status,
         projectId: t.projectId,
         assigneeId: t.assigneeId,
+        reviewerId: t.reviewerId,
+        submissionNote: t.submissionNote,
         reviewComment: t.reviewComment,
         reviewOutcome: t.reviewOutcome,
         submittedAt: t.submittedAt?.toISOString() ?? null,
@@ -55,9 +68,18 @@ export default async function ProjectPage({ params }: Props) {
         tradeCode: t.tradeCode,
         createdAt: t.createdAt.toISOString(),
         updatedAt: t.updatedAt.toISOString(),
-        assignee: t.assignee
+        assignee: t.assignee,
+        attachments: t.attachments.map((a) => ({
+          id: a.id,
+          fileKey: a.fileKey,
+          fileName: a.fileName,
+          mimeType: a.mimeType,
+          fileSize: a.fileSize,
+          createdAt: a.createdAt.toISOString()
+        }))
       }))}
       members={members}
+      seniors={seniors}
     />
   );
 }
