@@ -17,10 +17,7 @@ export async function POST(req: Request, { params }: RouteContext) {
     reviewerId?: string;
   };
 
-  const task = await prisma.task.findUnique({
-    where: { id: taskId },
-    include: { logs: { select: { minutes: true } } }
-  });
+  const task = await prisma.task.findUnique({ where: { id: taskId } });
 
   if (!task) return NextResponse.json({ error: "Task not found" }, { status: 404 });
 
@@ -33,11 +30,6 @@ export async function POST(req: Request, { params }: RouteContext) {
       { error: `Cannot submit task in status ${task.status}` },
       { status: 409 }
     );
-  }
-
-  const loggedMinutes = task.logs.reduce((sum, log) => sum + log.minutes, 0);
-  if (loggedMinutes <= 0 && task.timeSpentMinute <= 0) {
-    return NextResponse.json({ error: "Cannot submit without a time log" }, { status: 400 });
   }
 
   const updated = await prisma.task.update({
