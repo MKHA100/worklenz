@@ -75,7 +75,7 @@ const taskColumns: ColumnsType<MyTask> = [
     dataIndex: "title",
     key: "title",
     render: (title, record) => (
-      <Link href={`/worklenz/projects/${record.projectId}`} style={{ fontWeight: 500 }}>
+      <Link href={`/prelim/projects/${record.projectId}`} style={{ fontWeight: 500 }}>
         {title}
       </Link>
     )
@@ -181,7 +181,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
             title={
               <Flex justify="space-between" align="center">
                 <Text strong>My Tasks</Text>
-                <Link href="/worklenz/projects">
+                <Link href="/prelim/projects">
                   <Button type="link" size="small" icon={<ArrowRightOutlined />}>
                     View all projects
                   </Button>
@@ -211,7 +211,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
             title={
               <Flex justify="space-between" align="center">
                 <Text strong>Recent Projects</Text>
-                <Link href="/worklenz/projects">
+                <Link href="/prelim/projects">
                   <Button type="link" size="small" icon={<ArrowRightOutlined />}>
                     All
                   </Button>
@@ -226,7 +226,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
             ) : (
               <Flex vertical gap={8}>
                 {recentProjects.map((p) => (
-                  <Link key={p.id} href={`/worklenz/projects/${p.id}`}>
+                  <Link key={p.id} href={`/prelim/projects/${p.id}`}>
                     <Card
                       size="small"
                       hoverable

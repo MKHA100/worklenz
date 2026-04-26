@@ -22,18 +22,18 @@ const ROLE_ACCESS: Record<string, string[]> = {
 };
 
 const ALL_NAV = [
-  { key: "home",         label: "Home",         href: "/worklenz/home",               icon: <HomeOutlined /> },
-  { key: "projects",     label: "Projects",      href: "/worklenz/projects",           icon: <ProjectOutlined /> },
-  { key: "attendance",   label: "Attendance",    href: "/worklenz/attendance",         icon: <ScheduleOutlined /> },
-  { key: "review-queue", label: "Review Queue",  href: "/worklenz/review-queue",       icon: <CheckSquareOutlined /> },
-  { key: "reporting",    label: "Reporting",     href: "/worklenz/reporting/overview", icon: <BarChartOutlined /> }
+  { key: "home",         label: "Home",         href: "/prelim/home",               icon: <HomeOutlined /> },
+  { key: "projects",     label: "Projects",      href: "/prelim/projects",           icon: <ProjectOutlined /> },
+  { key: "attendance",   label: "Attendance",    href: "/prelim/attendance",         icon: <ScheduleOutlined /> },
+  { key: "review-queue", label: "Review Queue",  href: "/prelim/review-queue",       icon: <CheckSquareOutlined /> },
+  { key: "reporting",    label: "Reporting",     href: "/prelim/reporting/overview", icon: <BarChartOutlined /> }
 ];
 
 type Props = { role: string; children: ReactNode };
 
-export function WorklenzNav({ role, children }: Props) {
+export function PrelimNav({ role, children }: Props) {
   const pathname = usePathname();
-  const segment = pathname.split("/worklenz/")[1]?.split("/")[0] ?? "home";
+  const segment = pathname.split("/prelim/")[1]?.split("/")[0] ?? "home";
 
   const allowed = ROLE_ACCESS[role] ?? ROLE_ACCESS["qs"];
   const visibleNav = ALL_NAV.filter((n) => allowed.includes(n.key));
@@ -73,7 +73,7 @@ export function WorklenzNav({ role, children }: Props) {
             {/* Logo */}
             <Link
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              href={"/worklenz/home" as any}
+              href={"/prelim/home" as any}
               style={{
                 fontSize: 20, fontWeight: 800, color: "#1677ff",
                 textDecoration: "none", letterSpacing: "-0.5px",

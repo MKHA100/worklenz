@@ -16,6 +16,31 @@ export async function on_task_status_change(_io: Server, socket: Socket, data?: 
     const userId = getLoggedInUserIdFromSocket(socket);
     const taskData = await getTaskDetails(body.task_id, "status_id");
 
+    const targetStatusResult = await db.query(
+      `SELECT name FROM task_statuses WHERE id = $1::UUID LIMIT 1;`,
+      [body.status_id]
+    );
+    const targetStatusName = (targetStatusResult.rows[0]?.name || "").toLowerCase();
+    if (targetStatusName === "submitted") {
+      const timeLogResult = await db.query(
+        `SELECT COUNT(*)::INT AS count FROM task_work_log WHERE task_id = $1::UUID AND time_spent > 0;`,
+        [body.task_id]
+      );
+      const timeLogCount = timeLogResult.rows[0]?.count || 0;
+      if (timeLogCount <= 0) {
+        const {color_code, color_code_dark} = await TasksControllerV2.getTaskStatusColor(taskData.status_id);
+        return socket.emit(SocketEvents.TASK_STATUS_CHANGE.toString(), {
+          id: body.task_id,
+          parent_task: body.parent_task,
+          status_id: taskData.status_id,
+          color_code: color_code + TASK_STATUS_COLOR_ALPHA,
+          color_code_dark,
+          completed_deps: false,
+          validation_error: "Cannot submit task without a time log"
+        });
+      }
+    }
+
     const canContinue = await TasksControllerV2.checkForCompletedDependencies(body.task_id, body.status_id);
 
     if (!canContinue) {

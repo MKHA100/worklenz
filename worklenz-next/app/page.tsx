@@ -8,5 +8,5 @@ export default async function IndexPage() {
     redirect("/sign-in");
   }
 
-  redirect("/worklenz/home");
+  redirect("/prelim/home");
 }

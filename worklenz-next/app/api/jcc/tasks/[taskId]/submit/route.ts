@@ -32,13 +32,45 @@ export async function POST(req: Request, { params }: RouteContext) {
     );
   }
 
-  const updated = await prisma.task.update({
-    where: { id: taskId },
-    data: {
-      status: "SUBMITTED",
-      submittedAt: new Date(),
-      submissionNote: body.submissionNote ?? null,
-      reviewerId: body.reviewerId ?? null
+  const roundNumber = await prisma.taskSubmission.count({ where: { taskId } }) + 1;
+
+  const [updated, submission] = await prisma.$transaction(async (tx) => {
+    const updatedTask = await tx.task.update({
+      where: { id: taskId },
+      data: {
+        status: "SUBMITTED",
+        submittedAt: new Date(),
+        submissionNote: body.submissionNote ?? null,
+        reviewerId: body.reviewerId ?? null
+      }
+    });
+
+    const newSubmission = await tx.taskSubmission.create({
+      data: {
+        taskId,
+        roundNumber,
+        submittedById: profile.id,
+        submissionNote: body.submissionNote ?? null,
+        outcome: "PENDING"
+      }
+    });
+
+    // Link all orphan attachments (uploaded this round) to this submission
+    await tx.taskAttachment.updateMany({
+      where: { taskId, submissionId: null },
+      data: { submissionId: newSubmission.id }
+    });
+
+    return [updatedTask, newSubmission];
+  });
+
+  // Fetch submission with full relations for response
+  const submissionFull = await prisma.taskSubmission.findUnique({
+    where: { id: submission.id },
+    include: {
+      submittedBy: { select: { id: true, fullName: true, email: true } },
+      reviewedBy: { select: { id: true, fullName: true, email: true } },
+      attachments: true
     }
   });
 
@@ -48,5 +80,5 @@ export async function POST(req: Request, { params }: RouteContext) {
     payload: { taskId: updated.id, projectId: updated.projectId, actorUserId: profile.id }
   });
 
-  return NextResponse.json({ task: updated });
+  return NextResponse.json({ task: updated, submission: submissionFull });
 }

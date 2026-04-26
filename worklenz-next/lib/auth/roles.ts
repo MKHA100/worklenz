@@ -28,7 +28,7 @@ export async function requireOneOfRoles(roles: string[]) {
   const role = await resolveRole(userId);
 
   if (!role || !roles.includes(role)) {
-    redirect("/worklenz/unauthorized");
+    redirect("/prelim/unauthorized");
   }
 
   return role;

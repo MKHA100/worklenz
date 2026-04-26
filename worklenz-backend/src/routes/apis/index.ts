@@ -62,6 +62,10 @@ import customColumnsApiRouter from "./custom-columns-api-router";
 import userActivityLogsApiRouter from "./user-activity-logs-api-router";
 import supportApiRouter from "./support-api-router";
 import accountApiRouter from "./account-api-router";
+import attendanceApiRouter from "./attendance-api-router";
+import officesApiRouter from "./offices-api-router";
+import taskQueryLogsApiRouter from "./task-query-logs-api-router";
+import jccApiRouter from "./jcc-api-router";
 
 const api = express.Router();
 
@@ -124,6 +128,10 @@ api.use("/task-recurring", taskRecurringApiRouter);
 api.use("/custom-columns", customColumnsApiRouter);
 api.use("/support", supportApiRouter);
 api.use("/account", accountApiRouter);
+api.use("/attendance", attendanceApiRouter);
+api.use("/offices", officesApiRouter);
+api.use("/task-query-logs", taskQueryLogsApiRouter);
+api.use("/jcc", jccApiRouter);
 
 api.use("/logs", userActivityLogsApiRouter);
 export default api;

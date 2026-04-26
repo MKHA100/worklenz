@@ -36,7 +36,9 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
     return NextResponse.json({ error: "Invalid status" }, { status: 400 });
   }
 
+  const REVIEW_OUTCOMES = ["APPROVED", "REVISION_REQUIRED", "REJECTED", "ON_HOLD"];
   const now = new Date();
+
   const updated = await prisma.task.update({
     where: { id: taskId },
     data: {
@@ -45,7 +47,7 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
       ...(body.status !== undefined ? {
         status: body.status,
         ...(body.status === "SUBMITTED" ? { submittedAt: now } : {}),
-        ...(["APPROVED", "REJECTED", "REVISION_REQUIRED"].includes(body.status) ? { reviewedAt: now } : {}),
+        ...(REVIEW_OUTCOMES.includes(body.status) ? { reviewedAt: now } : {}),
         ...(body.status === "REVISION_REQUIRED" ? { revisionCount: { increment: 1 } } : {})
       } : {}),
       ...(body.assigneeId !== undefined ? { assigneeId: body.assigneeId } : {}),
@@ -58,6 +60,25 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
     },
     include: { assignee: { select: { id: true, fullName: true, email: true } } }
   });
+
+  // Stamp the pending submission with the reviewer's outcome
+  if (body.status && REVIEW_OUTCOMES.includes(body.status)) {
+    const pending = await prisma.taskSubmission.findFirst({
+      where: { taskId, outcome: "PENDING" },
+      orderBy: { createdAt: "desc" }
+    });
+    if (pending) {
+      await prisma.taskSubmission.update({
+        where: { id: pending.id },
+        data: {
+          reviewedById: profile.id,
+          reviewedAt: now,
+          reviewComment: body.reviewComment ?? null,
+          outcome: body.status
+        }
+      });
+    }
+  }
 
   const r = redis();
   if (r) await r.del(`project:${task.projectId}:tasks`);

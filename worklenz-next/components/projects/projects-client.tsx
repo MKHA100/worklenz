@@ -117,7 +117,7 @@ export function ProjectsClient({ initialProjects }: Props) {
         <Flex gap={8} align="center">
           <FolderOutlined style={{ color: "#1677ff" }} />
           <button
-            onClick={() => router.push(`/worklenz/projects/${record.id}`)}
+            onClick={() => router.push(`/prelim/projects/${record.id}`)}
             style={{
               background: "none", border: "none", cursor: "pointer",
               color: "#262626", fontWeight: 500, fontSize: 14, padding: 0
@@ -180,7 +180,7 @@ export function ProjectsClient({ initialProjects }: Props) {
               type="text"
               size="small"
               icon={<EyeOutlined />}
-              onClick={() => router.push(`/worklenz/projects/${record.id}`)}
+              onClick={() => router.push(`/prelim/projects/${record.id}`)}
             />
           </Tooltip>
           <Tooltip title="Delete">
@@ -241,7 +241,7 @@ export function ProjectsClient({ initialProjects }: Props) {
         loading={loading}
         pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `${t} projects` }}
         onRow={(record) => ({
-          onDoubleClick: () => router.push(`/worklenz/projects/${record.id}`)
+          onDoubleClick: () => router.push(`/prelim/projects/${record.id}`)
         })}
         style={{ background: "white", borderRadius: 8 }}
         size="middle"

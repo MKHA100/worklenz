@@ -1,0 +1,7 @@
+const ROLE_ACCESS: Record<string, string[]> = {
+  owner:            ["home", "projects", "attendance", "review-queue", "reporting"],
+  admin:            ["home", "projects", "attendance", "review-queue", "reporting"],
+  managing_director:["home", "projects", "attendance", "review-queue", "reporting"],
+  senior_qs:        ["home", "projects", "attendance", "review-queue", "reporting"],
+  qs:               ["home", "projects", "attendance"]
+};

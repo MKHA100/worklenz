@@ -15,6 +15,7 @@ import {
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { UploadFile, UploadProps } from "antd/es/upload";
+import { SubmissionTimeline } from "@/components/review/submission-timeline";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -39,6 +40,14 @@ const QS_SUBMITTABLE = ["ASSIGNED", "IN_PROGRESS", "REVISION_REQUIRED"];
 type Attachment = { id: string; fileKey: string; fileName: string; mimeType: string | null; fileSize: number | null; createdAt: string };
 type Assignee = { id: string; fullName: string | null; email: string } | null;
 
+type Submission = {
+  id: string; roundNumber: number; submittedAt: string; submissionNote: string | null;
+  outcome: string; reviewedAt: string | null; reviewComment: string | null;
+  submittedBy: { id: string; fullName: string | null; email: string } | null;
+  reviewedBy: { id: string; fullName: string | null; email: string } | null;
+  attachments: Attachment[];
+};
+
 type Task = {
   id: string; title: string; description: string | null; status: string;
   projectId: string; assigneeId: string | null; reviewerId: string | null;
@@ -49,6 +58,7 @@ type Task = {
   unit: string | null; tradeCode: string | null;
   createdAt: string; updatedAt: string; assignee: Assignee;
   attachments: Attachment[];
+  submissions: Submission[];
 };
 
 type Member = { id: string; fullName: string | null; email: string; role: string };
@@ -60,13 +70,22 @@ type Props = {
   initialTasks: Task[];
   members: Member[];
   seniors: Member[];
+  allUsers: Member[];
 };
 
-export function ProjectViewClient({ currentUserId, userRole, project, initialTasks, members, seniors }: Props) {
+const MANAGER_ROLES = ["owner", "admin", "managing_director", "senior_qs"];
+
+export function ProjectViewClient({ currentUserId, userRole, project, initialTasks, members: initialMembers, seniors, allUsers }: Props) {
   const { message } = App.useApp();
   const isReviewer = REVIEWER_ROLES.includes(userRole);
+  const canManageMembers = MANAGER_ROLES.includes(userRole);
 
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [members, setMembers] = useState<Member[]>(initialMembers);
+  const [addMemberId, setAddMemberId] = useState<string | undefined>(undefined);
+  const [addingMember, setAddingMember] = useState(false);
+  const [editTradeCode, setEditTradeCode] = useState("");
+  const [editUnit, setEditUnit] = useState("");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -148,9 +167,11 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     }
     // DON'T reset timer state if same task — timer keeps running across close/reopen
     setSelectedTask(task);
-    setReviewComment(task.reviewComment ?? "");
-    setSubmissionNote(task.submissionNote ?? "");
+    setReviewComment("");
+    setSubmissionNote("");
     setSelectedReviewerId(task.reviewerId ?? undefined);
+    setEditTradeCode(task.tradeCode ?? "");
+    setEditUnit(task.unit ?? "");
     setFileList([]);
     setDrawerOpen(true);
   }
@@ -181,6 +202,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     try {
       await patchTask(selectedTask.id, { status: statusMap[action], reviewComment });
       message.success("Review action applied");
+      setReviewComment("");
       setDrawerOpen(false);
     } catch { message.error("Action failed"); }
   }
@@ -247,7 +269,32 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     }
   }
 
-  async function handleCreate(values: { title: string; assigneeId?: string; status?: string; tradeCode?: string }) {
+  async function handleAddMember() {
+    if (!addMemberId) return;
+    setAddingMember(true);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: addMemberId })
+      });
+      if (!res.ok) throw new Error((await res.json() as { error: string }).error);
+      const { member } = await res.json() as { member: Member };
+      setMembers((prev) => prev.some((m) => m.id === member.id) ? prev : [...prev, member]);
+      setAddMemberId(undefined);
+    } catch (e) { message.error(e instanceof Error ? e.message : "Failed to add member"); }
+    finally { setAddingMember(false); }
+  }
+
+  async function handleRemoveMember(userId: string) {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/members?userId=${userId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error((await res.json() as { error: string }).error);
+      setMembers((prev) => prev.filter((m) => m.id !== userId));
+    } catch (e) { message.error(e instanceof Error ? e.message : "Failed to remove member"); }
+  }
+
+  async function handleCreate(values: { title: string; assigneeId?: string; status?: string; tradeCode?: string; unit?: string }) {
     setCreating(true);
     try {
       const res = await fetch("/api/tasks", {
@@ -260,10 +307,10 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
       const assignee = members.find((m) => m.id === task.assigneeId) ?? null;
       setTasks((prev) => [{
         ...task, assignee: assignee ? { id: assignee.id, fullName: assignee.fullName, email: assignee.email } : null,
-        attachments: [], submittedAt: null, reviewedAt: null, reviewComment: null,
+        attachments: [], submissions: [], submittedAt: null, reviewedAt: null, reviewComment: null,
         reviewOutcome: null, submissionNote: null, reviewerId: null,
         revisionCount: 0, timeSpentMinute: 0, plannedRate: null, actualRate: null,
-        efficiency: null, variance: null, unit: null, tradeCode: null
+        efficiency: null, variance: null, unit: task.unit ?? null, tradeCode: task.tradeCode ?? null
       }, ...prev]);
       message.success("Task created");
       form.resetFields();
@@ -437,35 +484,73 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
         {
           key: "members", label: <span><TeamOutlined /> Members</span>,
           children: (
-            <Table
-              dataSource={members} rowKey="id" size="middle" pagination={false}
-              columns={[
-                {
-                  title: "Member", key: "name",
-                  render: (_, m) => (
-                    <Flex gap={10} align="center">
-                      <Avatar icon={<UserOutlined />} style={{ background: "#1677ff" }} />
-                      <div>
-                        <Text strong style={{ fontSize: 14 }}>{m.fullName ?? "—"}</Text>
-                        <br />
-                        <Text type="secondary" style={{ fontSize: 12 }}>{m.email}</Text>
-                      </div>
-                    </Flex>
-                  )
-                },
-                {
-                  title: "Role", dataIndex: "role", key: "role", width: 160,
-                  render: (role: string) => <Tag style={{ textTransform: "capitalize" }}>{role.replace(/_/g, " ")}</Tag>
-                },
-                {
-                  title: "Tasks", key: "tasks", width: 120,
-                  render: (_, m) => {
-                    const count = tasks.filter((t) => t.assigneeId === m.id).length;
-                    return <Tag color={count > 0 ? "blue" : "default"}>{count} tasks</Tag>;
-                  }
-                }
-              ]}
-            />
+            <div>
+              {canManageMembers && (
+                <Flex gap={8} style={{ marginBottom: 16 }}>
+                  <Select
+                    style={{ flex: 1 }}
+                    placeholder="Add a member..."
+                    showSearch
+                    allowClear
+                    value={addMemberId}
+                    onChange={setAddMemberId}
+                    options={allUsers
+                      .filter((u) => !members.some((m) => m.id === u.id))
+                      .map((u) => ({ value: u.id, label: `${u.fullName ?? u.email} (${u.role.replace(/_/g, " ")})` }))}
+                  />
+                  <Button
+                    type="primary" icon={<PlusOutlined />}
+                    loading={addingMember}
+                    disabled={!addMemberId}
+                    onClick={handleAddMember}
+                  >
+                    Add
+                  </Button>
+                </Flex>
+              )}
+              <Table
+                dataSource={members} rowKey="id" size="middle" pagination={false}
+                columns={[
+                  {
+                    title: "Member", key: "name",
+                    render: (_, m) => (
+                      <Flex gap={10} align="center">
+                        <Avatar icon={<UserOutlined />} style={{ background: "#1677ff" }} />
+                        <div>
+                          <Text strong style={{ fontSize: 14 }}>{m.fullName ?? "—"}</Text>
+                          <br />
+                          <Text type="secondary" style={{ fontSize: 12 }}>{m.email}</Text>
+                        </div>
+                      </Flex>
+                    )
+                  },
+                  {
+                    title: "Role", dataIndex: "role", key: "role", width: 160,
+                    render: (role: string) => <Tag style={{ textTransform: "capitalize" }}>{role.replace(/_/g, " ")}</Tag>
+                  },
+                  {
+                    title: "Tasks", key: "tasks", width: 100,
+                    render: (_, m) => {
+                      const count = tasks.filter((t) => t.assigneeId === m.id).length;
+                      return <Tag color={count > 0 ? "blue" : "default"}>{count} tasks</Tag>;
+                    }
+                  },
+                  ...(canManageMembers ? [{
+                    title: "", key: "remove", width: 60,
+                    render: (_: unknown, m: Member) => (
+                      m.role === "managing_director" ? null : (
+                        <Tooltip title="Remove from project">
+                          <Button
+                            size="small" danger type="text" icon={<DeleteOutlined />}
+                            onClick={() => handleRemoveMember(m.id)}
+                          />
+                        </Tooltip>
+                      )
+                    )
+                  }] : [])
+                ]}
+              />
+            </div>
           )
         }
       ]} />
@@ -511,8 +596,36 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
               <Descriptions.Item label="Assignee">
                 {selectedTask.assignee ? (selectedTask.assignee.fullName ?? selectedTask.assignee.email) : "Unassigned"}
               </Descriptions.Item>
-              <Descriptions.Item label="Trade Code">{selectedTask.tradeCode ?? "—"}</Descriptions.Item>
-              <Descriptions.Item label="Norm">{selectedTask.unit ?? "—"}</Descriptions.Item>
+              <Descriptions.Item label="Trade Code">
+                <Input
+                  variant="borderless"
+                  size="small"
+                  value={editTradeCode}
+                  placeholder="—"
+                  onChange={(e) => setEditTradeCode(e.target.value)}
+                  onBlur={() => {
+                    if (editTradeCode !== (selectedTask.tradeCode ?? "")) {
+                      patchTask(selectedTask.id, { tradeCode: editTradeCode || null }).catch(() => {});
+                    }
+                  }}
+                  style={{ padding: 0, width: "100%" }}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="Norm">
+                <Input
+                  variant="borderless"
+                  size="small"
+                  value={editUnit}
+                  placeholder="—"
+                  onChange={(e) => setEditUnit(e.target.value)}
+                  onBlur={() => {
+                    if (editUnit !== (selectedTask.unit ?? "")) {
+                      patchTask(selectedTask.id, { unit: editUnit || null }).catch(() => {});
+                    }
+                  }}
+                  style={{ padding: 0, width: "100%" }}
+                />
+              </Descriptions.Item>
               <Descriptions.Item label="Time Logged">
                 {Math.floor(selectedTask.timeSpentMinute / 60)}h {selectedTask.timeSpentMinute % 60}m
               </Descriptions.Item>
@@ -545,55 +658,16 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
               </Flex>
             </Card>
 
-            {/* ---- Existing attachments ---- */}
-            {selectedTask.attachments.length > 0 && (
+            {/* ---- Submission history — visible to ALL roles ---- */}
+            {selectedTask.submissions.length > 0 && (
               <>
                 <Divider />
-                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Attachments</Text>
-                <Flex vertical gap={6} style={{ marginTop: 8 }}>
-                  {selectedTask.attachments.map((att) => (
-                    <Flex key={att.id} justify="space-between" align="center"
-                      style={{ background: "#fafafa", padding: "6px 10px", borderRadius: 6, border: "1px solid #f0f0f0" }}>
-                      <Flex gap={6} align="center">
-                        <PaperClipOutlined style={{ color: "#8c8c8c" }} />
-                        <Text style={{ fontSize: 13 }}>{att.fileName}</Text>
-                        {att.fileSize && (
-                          <Text type="secondary" style={{ fontSize: 11 }}>
-                            ({(att.fileSize / 1024).toFixed(0)} KB)
-                          </Text>
-                        )}
-                      </Flex>
-                      {selectedTask.status !== "SUBMITTED" && selectedTask.status !== "APPROVED" && (
-                        <Button
-                          type="text" size="small" danger icon={<DeleteOutlined />}
-                          onClick={() => handleDeleteAttachment(selectedTask.id, att.id)}
-                        />
-                      )}
-                    </Flex>
-                  ))}
-                </Flex>
-              </>
-            )}
-
-            {/* ---- Submission note (read-only once submitted) ---- */}
-            {selectedTask.submissionNote && (
-              <>
-                <Divider />
-                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Submission Note</Text>
-                <Paragraph style={{ marginTop: 4, background: "#f6ffed", padding: 10, borderRadius: 6, fontSize: 13 }}>
-                  {selectedTask.submissionNote}
-                </Paragraph>
-              </>
-            )}
-
-            {/* ---- Review comment (visible to all once set) ---- */}
-            {selectedTask.reviewComment && (
-              <>
-                <Divider />
-                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Review Comment</Text>
-                <Paragraph style={{ marginTop: 4, background: "#fff7e6", padding: 10, borderRadius: 6, fontSize: 13 }}>
-                  {selectedTask.reviewComment}
-                </Paragraph>
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  Submission History
+                </Text>
+                <div style={{ marginTop: 12 }}>
+                  <SubmissionTimeline submissions={selectedTask.submissions} />
+                </div>
               </>
             )}
 
@@ -760,6 +834,9 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                 { value: "FIRE", label: "FIRE — Fire Protection" }
               ]}
             />
+          </Form.Item>
+          <Form.Item name="unit" label="Norm">
+            <Input placeholder="e.g. m², m³, lm..." />
           </Form.Item>
           <Form.Item name="status" label="Initial Status" initialValue="ASSIGNED">
             <Select options={ALL_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))} />

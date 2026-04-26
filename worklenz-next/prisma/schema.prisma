@@ -21,13 +21,16 @@ model UserProfile {
 
   office             Office?       @relation(fields: [officeId], references: [id])
   customRole         Role?         @relation(fields: [roleId], references: [id])
-  tasks              Task[]        @relation("TaskAssignee")
-  reviewTasks        Task[]        @relation("TaskReviewer")
-  attendance         Attendance[]
-  queryRaised        TaskQueryLog[] @relation("QueryRaisedBy")
-  queryReplied       TaskQueryLog[] @relation("QueryRespondedBy")
-  createdRoles       Role[]        @relation("RoleCreatedBy")
-  createdTemplates   ProjectTemplate[] @relation("TemplateCreatedBy")
+  tasks               Task[]         @relation("TaskAssignee")
+  reviewTasks         Task[]         @relation("TaskReviewer")
+  attendance          Attendance[]
+  queryRaised         TaskQueryLog[] @relation("QueryRaisedBy")
+  queryReplied        TaskQueryLog[] @relation("QueryRespondedBy")
+  createdRoles        Role[]         @relation("RoleCreatedBy")
+  createdTemplates    ProjectTemplate[] @relation("TemplateCreatedBy")
+  submittedWork       TaskSubmission[]  @relation("SubmissionBy")
+  reviewedSubmissions TaskSubmission[]  @relation("SubmissionReviewedBy")
+  projectMemberships  ProjectMember[]
 }
 
 model Project {
@@ -38,8 +41,21 @@ model Project {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  office Office? @relation(fields: [officeId], references: [id])
-  tasks  Task[]
+  office  Office?         @relation(fields: [officeId], references: [id])
+  tasks   Task[]
+  members ProjectMember[]
+}
+
+model ProjectMember {
+  id        String   @id @default(uuid()) @db.Uuid
+  projectId String   @db.Uuid
+  userId    String   @db.Uuid
+  addedAt   DateTime @default(now())
+
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
 }
 
 model Task {
@@ -72,12 +88,14 @@ model Task {
   logs          TaskTimeLog[]
   queries       TaskQueryLog[]
   attachments   TaskAttachment[]
+  submissions   TaskSubmission[]
   productivity  TaskProductivity?
 }
 
 model TaskAttachment {
   id           String   @id @default(uuid()) @db.Uuid
   taskId       String   @db.Uuid
+  submissionId String?  @db.Uuid
   fileKey      String
   fileName     String
   mimeType     String?
@@ -85,7 +103,27 @@ model TaskAttachment {
   uploadedById String?  @db.Uuid
   createdAt    DateTime @default(now())
 
-  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  task       Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  submission TaskSubmission? @relation(fields: [submissionId], references: [id])
+}
+
+model TaskSubmission {
+  id             String    @id @default(uuid()) @db.Uuid
+  taskId         String    @db.Uuid
+  roundNumber    Int       @default(1)
+  submittedById  String?   @db.Uuid
+  submittedAt    DateTime  @default(now())
+  submissionNote String?
+  reviewedById   String?   @db.Uuid
+  reviewedAt     DateTime?
+  reviewComment  String?
+  outcome        String    @default("PENDING")
+  createdAt      DateTime  @default(now())
+
+  task        Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  submittedBy UserProfile?    @relation("SubmissionBy", fields: [submittedById], references: [id])
+  reviewedBy  UserProfile?    @relation("SubmissionReviewedBy", fields: [reviewedById], references: [id])
+  attachments TaskAttachment[]
 }
 
 model TaskTimeLog {
