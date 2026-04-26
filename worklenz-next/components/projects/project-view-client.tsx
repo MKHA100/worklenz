@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Tabs, Table, Tag, Button, Modal, Form, Input, Select, Space,
   Typography, Flex, Drawer, Descriptions, Divider, Progress,
-  Avatar, Tooltip, Badge, App, Card, Empty, Statistic, Upload
+  Avatar, Tooltip, Badge, App, Card, Empty, Statistic, Upload, AutoComplete
 } from "antd";
 import {
   PlusOutlined, UnorderedListOutlined, AppstoreOutlined,
@@ -186,26 +186,18 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
   }
 
   // Upload a single file to R2 via the sign endpoint
+  // Server-side upload: Next.js → R2 (avoids browser CORS on direct presigned PUT)
   async function uploadFileToR2(file: File, taskId: string): Promise<{ fileKey: string; fileName: string; mimeType: string; fileSize: number }> {
-    const ext = file.name.split(".").pop() ?? "";
-    const fileKey = `tasks/${taskId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("taskId", taskId);
 
-    const signRes = await fetch("/api/files/sign", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: fileKey, mode: "upload", expiresInSeconds: 300 })
-    });
-    if (!signRes.ok) throw new Error("Failed to get upload URL");
-    const { url } = await signRes.json() as { url: string };
-
-    const putRes = await fetch(url, {
-      method: "PUT",
-      headers: { "Content-Type": file.type || "application/octet-stream" },
-      body: file
-    });
-    if (!putRes.ok) throw new Error("Upload failed");
-
-    return { fileKey, fileName: file.name, mimeType: file.type, fileSize: file.size };
+    const res = await fetch("/api/files/upload", { method: "POST", body: fd });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({})) as { error?: string };
+      throw new Error(err.error ?? "Upload failed");
+    }
+    return res.json() as Promise<{ fileKey: string; fileName: string; mimeType: string; fileSize: number }>;
   }
 
   async function handleSubmitForReview() {
@@ -520,7 +512,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                 {selectedTask.assignee ? (selectedTask.assignee.fullName ?? selectedTask.assignee.email) : "Unassigned"}
               </Descriptions.Item>
               <Descriptions.Item label="Trade Code">{selectedTask.tradeCode ?? "—"}</Descriptions.Item>
-              <Descriptions.Item label="Unit">{selectedTask.unit ?? "—"}</Descriptions.Item>
+              <Descriptions.Item label="Norm">{selectedTask.unit ?? "—"}</Descriptions.Item>
               <Descriptions.Item label="Time Logged">
                 {Math.floor(selectedTask.timeSpentMinute / 60)}h {selectedTask.timeSpentMinute % 60}m
               </Descriptions.Item>
@@ -751,13 +743,23 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
               options={members.map((m) => ({ value: m.id, label: m.fullName ?? m.email }))} />
           </Form.Item>
           <Form.Item name="tradeCode" label="Trade Code">
-            <Select placeholder="Select trade" allowClear options={[
-              { value: "QS", label: "Quantity Surveying" },
-              { value: "STRUCT", label: "Structural" },
-              { value: "MEP", label: "MEP" },
-              { value: "ARCH", label: "Architectural" },
-              { value: "CIVIL", label: "Civil" }
-            ]} />
+            <AutoComplete
+              placeholder="Select or type custom trade code"
+              allowClear
+              filterOption={(input, opt) =>
+                (opt?.value?.toString() ?? "").toLowerCase().includes(input.toLowerCase())
+              }
+              options={[
+                { value: "QS", label: "QS — Quantity Surveying" },
+                { value: "STRUCT", label: "STRUCT — Structural" },
+                { value: "MEP", label: "MEP — Mechanical Electrical Plumbing" },
+                { value: "ARCH", label: "ARCH — Architectural" },
+                { value: "CIVIL", label: "CIVIL — Civil" },
+                { value: "LAND", label: "LAND — Landscaping" },
+                { value: "INT", label: "INT — Interior" },
+                { value: "FIRE", label: "FIRE — Fire Protection" }
+              ]}
+            />
           </Form.Item>
           <Form.Item name="status" label="Initial Status" initialValue="ASSIGNED">
             <Select options={ALL_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))} />
