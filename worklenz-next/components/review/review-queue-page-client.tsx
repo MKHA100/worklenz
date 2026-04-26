@@ -152,26 +152,26 @@ export function ReviewQueuePageClient({ initialTasks }: Props) {
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={8}>
-          <Card bordered={false} style={{ textAlign: "center" }}>
-            <Statistic title="Awaiting Review" value={tasks.length} valueStyle={{ color: "#fa8c16" }} />
+          <Card variant="borderless" style={{ textAlign: "center" }}>
+            <Statistic title="Awaiting Review" value={tasks.length} styles={{ content: { color: "#fa8c16" } }} />
           </Card>
         </Col>
         <Col xs={8}>
-          <Card bordered={false} style={{ textAlign: "center" }}>
+          <Card variant="borderless" style={{ textAlign: "center" }}>
             <Statistic
               title="With Revisions"
               value={tasks.filter((t) => t.revisionCount > 0).length}
-              valueStyle={{ color: "#1677ff" }}
+              styles={{ content: { color: "#1677ff" } }}
             />
           </Card>
         </Col>
         <Col xs={8}>
-          <Card bordered={false} style={{ textAlign: "center" }}>
+          <Card variant="borderless" style={{ textAlign: "center" }}>
             <Statistic
               title="Total Hours"
               value={(tasks.reduce((s, t) => s + t.timeSpentMinute, 0) / 60).toFixed(1)}
               suffix="h"
-              valueStyle={{ color: "#52c41a" }}
+              styles={{ content: { color: "#52c41a" } }}
             />
           </Card>
         </Col>

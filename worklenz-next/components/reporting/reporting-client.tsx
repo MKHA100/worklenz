@@ -77,33 +77,33 @@ export function ReportingClient({ stats, tasksByStatus, recentActivity }: Props)
       {/* KPI Stats */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={12} sm={8} lg={4}>
-          <Card bordered={false}>
-            <Statistic title="Total Tasks" value={stats.totalTasks} prefix={<ClockCircleOutlined />} valueStyle={{ color: "#1677ff" }} />
+          <Card variant="borderless">
+            <Statistic title="Total Tasks" value={stats.totalTasks} prefix={<ClockCircleOutlined />} styles={{ content: { color: "#1677ff" } }} />
           </Card>
         </Col>
         <Col xs={12} sm={8} lg={4}>
-          <Card bordered={false}>
-            <Statistic title="Approved" value={stats.approvedTasks} prefix={<CheckCircleOutlined />} valueStyle={{ color: "#52c41a" }} />
+          <Card variant="borderless">
+            <Statistic title="Approved" value={stats.approvedTasks} prefix={<CheckCircleOutlined />} styles={{ content: { color: "#52c41a" } }} />
           </Card>
         </Col>
         <Col xs={12} sm={8} lg={4}>
-          <Card bordered={false}>
-            <Statistic title="Pending Review" value={stats.submittedTasks} valueStyle={{ color: "#722ed1" }} />
+          <Card variant="borderless">
+            <Statistic title="Pending Review" value={stats.submittedTasks} styles={{ content: { color: "#722ed1" } }} />
           </Card>
         </Col>
         <Col xs={12} sm={8} lg={4}>
-          <Card bordered={false}>
-            <Statistic title="Revision Required" value={stats.revisionTasks} prefix={<RollbackOutlined />} valueStyle={{ color: "#fa8c16" }} />
+          <Card variant="borderless">
+            <Statistic title="Revision Required" value={stats.revisionTasks} prefix={<RollbackOutlined />} styles={{ content: { color: "#fa8c16" } }} />
           </Card>
         </Col>
         <Col xs={12} sm={8} lg={4}>
-          <Card bordered={false}>
-            <Statistic title="Projects" value={stats.totalProjects} prefix={<ProjectOutlined />} valueStyle={{ color: "#13c2c2" }} />
+          <Card variant="borderless">
+            <Statistic title="Projects" value={stats.totalProjects} prefix={<ProjectOutlined />} styles={{ content: { color: "#13c2c2" } }} />
           </Card>
         </Col>
         <Col xs={12} sm={8} lg={4}>
-          <Card bordered={false}>
-            <Statistic title="Members" value={stats.activeUsers} prefix={<TeamOutlined />} valueStyle={{ color: "#eb2f96" }} />
+          <Card variant="borderless">
+            <Statistic title="Members" value={stats.activeUsers} prefix={<TeamOutlined />} styles={{ content: { color: "#eb2f96" } }} />
           </Card>
         </Col>
       </Row>
@@ -111,7 +111,7 @@ export function ReportingClient({ stats, tasksByStatus, recentActivity }: Props)
       <Row gutter={[24, 24]}>
         {/* Completion rate */}
         <Col xs={24} lg={8}>
-          <Card title="Completion Rate" bordered={false}>
+          <Card title="Completion Rate" variant="borderless">
             <Flex vertical align="center" gap={16} style={{ padding: "16px 0" }}>
               <Progress
                 type="circle"
@@ -123,7 +123,7 @@ export function ReportingClient({ stats, tasksByStatus, recentActivity }: Props)
             </Flex>
           </Card>
 
-          <Card title="Tasks by Status" bordered={false} style={{ marginTop: 16 }}>
+          <Card title="Tasks by Status" variant="borderless" style={{ marginTop: 16 }}>
             <Flex vertical gap={10}>
               {tasksByStatus.map(({ status, count }) => (
                 <div key={status}>
@@ -151,7 +151,7 @@ export function ReportingClient({ stats, tasksByStatus, recentActivity }: Props)
 
         {/* Recent activity */}
         <Col xs={24} lg={16}>
-          <Card title="Recent Activity (This Month)" bordered={false}>
+          <Card title="Recent Activity (This Month)" variant="borderless">
             <Table
               dataSource={recentActivity}
               columns={activityCols}

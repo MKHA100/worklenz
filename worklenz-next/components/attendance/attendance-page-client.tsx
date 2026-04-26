@@ -109,7 +109,7 @@ export function AttendancePageClient({ records: initial, offices }: Props) {
 
       <Row gutter={[24, 24]}>
         <Col xs={24} lg={8}>
-          <Card title="Log Attendance" bordered={false} style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
+          <Card title="Log Attendance" variant="borderless" style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
             <Form form={form} layout="vertical" onFinish={handleSubmit}>
               <Form.Item name="workDate" label="Date" rules={[{ required: true }]} initialValue={dayjs()}>
                 <DatePicker style={{ width: "100%" }} format="YYYY-MM-DD" />
@@ -144,7 +144,7 @@ export function AttendancePageClient({ records: initial, offices }: Props) {
         <Col xs={24} lg={16}>
           <Card
             title={`Recent Records (${records.length})`}
-            bordered={false}
+            variant="borderless"
             style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}
           >
             <Table

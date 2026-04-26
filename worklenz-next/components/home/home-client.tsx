@@ -119,7 +119,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
       {/* Stats */}
       <Row gutter={[16, 16]} style={{ marginBottom: 32 }}>
         <Col xs={12} sm={6}>
-          <Card bordered={false} style={{ borderLeft: "4px solid #1677ff" }}>
+          <Card variant="borderless" style={{ borderLeft: "4px solid #1677ff" }}>
             <Flex gap={12} align="center">
               <ClockCircleOutlined style={{ fontSize: 24, color: "#1677ff" }} />
               <div>
@@ -132,7 +132,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card bordered={false} style={{ borderLeft: "4px solid #fa8c16" }}>
+          <Card variant="borderless" style={{ borderLeft: "4px solid #fa8c16" }}>
             <Flex gap={12} align="center">
               <CheckCircleOutlined style={{ fontSize: 24, color: "#fa8c16" }} />
               <div>
@@ -145,7 +145,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card bordered={false} style={{ borderLeft: "4px solid #52c41a" }}>
+          <Card variant="borderless" style={{ borderLeft: "4px solid #52c41a" }}>
             <Flex gap={12} align="center">
               <ProjectOutlined style={{ fontSize: 24, color: "#52c41a" }} />
               <div>
@@ -158,7 +158,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card bordered={false} style={{ borderLeft: "4px solid #722ed1" }}>
+          <Card variant="borderless" style={{ borderLeft: "4px solid #722ed1" }}>
             <Flex gap={12} align="center">
               <CalendarOutlined style={{ fontSize: 24, color: "#722ed1" }} />
               <div>
@@ -188,7 +188,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
                 </Link>
               </Flex>
             }
-            bordered={false}
+            variant="borderless"
             style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}
           >
             {myTasks.length === 0 ? (
@@ -218,7 +218,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
                 </Link>
               </Flex>
             }
-            bordered={false}
+            variant="borderless"
             style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}
           >
             {recentProjects.length === 0 ? (
@@ -230,7 +230,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
                     <Card
                       size="small"
                       hoverable
-                      bordered
+                      variant="outlined"
                       style={{ borderRadius: 6 }}
                     >
                       <Flex justify="space-between" align="center">

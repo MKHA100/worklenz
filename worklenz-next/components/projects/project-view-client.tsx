@@ -72,8 +72,11 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
   }, []);
 
   function startTimer() {
+    if (!selectedTask) return;
+    // Resume from saved accumulated time
+    const baseSeconds = selectedTask.timeSpentMinute * 60;
     timerStartRef.current = new Date();
-    setTimerSeconds(0);
+    setTimerSeconds(baseSeconds);
     setTimerRunning(true);
     timerRef.current = setInterval(() => {
       setTimerSeconds((s) => s + 1);
@@ -84,13 +87,15 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
     if (timerRef.current) clearInterval(timerRef.current);
     setTimerRunning(false);
     if (!selectedTask || !timerStartRef.current) return;
-    const elapsed = Math.round(timerSeconds / 60);
+    // Elapsed = current display seconds minus the base seconds we started from
+    const baseSeconds = selectedTask.timeSpentMinute * 60;
+    const elapsedSeconds = timerSeconds - baseSeconds;
+    const elapsed = Math.round(elapsedSeconds / 60);
     if (elapsed < 1) { message.warning("Minimum 1 minute to log"); return; }
     try {
       const newMinutes = selectedTask.timeSpentMinute + elapsed;
       await patchTask(selectedTask.id, { timeSpentMinute: newMinutes });
       message.success(`Logged ${elapsed} minute${elapsed > 1 ? "s" : ""}`);
-      setTimerSeconds(0);
     } catch { message.error("Failed to log time"); }
   }
 
@@ -102,6 +107,12 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
   }
 
   function openTask(task: Task) {
+    // Stop any running timer before switching tasks
+    if (timerRef.current) clearInterval(timerRef.current);
+    setTimerRunning(false);
+    timerStartRef.current = null;
+    // Initialize display to task's accumulated time
+    setTimerSeconds(task.timeSpentMinute * 60);
     setSelectedTask(task);
     setReviewComment(task.reviewComment ?? "");
     setDrawerOpen(true);
@@ -350,7 +361,8 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
         }
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        width={520}
+        size="default"
+        styles={{ wrapper: { width: 520 } }}
         extra={
           selectedTask && (
             <Select
@@ -397,7 +409,7 @@ export function ProjectViewClient({ project, initialTasks, members }: Props) {
                 <Statistic
                   value={formatTimer(timerSeconds)}
                   prefix={<ClockCircleOutlined style={{ color: timerRunning ? "#1677ff" : "#8c8c8c" }} />}
-                  valueStyle={{ fontSize: 22, fontFamily: "monospace", color: timerRunning ? "#1677ff" : "#595959" }}
+                  styles={{ content: { fontSize: 22, fontFamily: "monospace", color: timerRunning ? "#1677ff" : "#595959" } }}
                 />
                 <Space>
                   {!timerRunning ? (
