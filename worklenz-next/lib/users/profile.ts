@@ -19,20 +19,20 @@ export async function requireUserProfile() {
 
   const fullName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || null;
   const metaRole = user.publicMetadata.role;
-  const role = typeof metaRole === "string" ? metaRole : "qs";
+  const explicitRole = typeof metaRole === "string" ? metaRole : null;
 
   return prisma.userProfile.upsert({
-    where: { clerkId: userId },
+    where: { email },
     update: {
-      email,
+      clerkId: userId,
       fullName,
-      role
+      ...(explicitRole ? { role: explicitRole } : {})
     },
     create: {
       clerkId: userId,
       email,
       fullName,
-      role
+      role: explicitRole ?? "qs"
     }
   });
 }

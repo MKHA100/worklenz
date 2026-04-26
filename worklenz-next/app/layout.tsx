@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
+import { AntdRegistry } from "@ant-design/nextjs-registry";
 import { ReactNode } from "react";
 import "./globals.css";
 
@@ -12,7 +13,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <ClerkProvider>
       <html lang="en">
-        <body>{children}</body>
+        <body>
+          <AntdRegistry>{children}</AntdRegistry>
+        </body>
       </html>
     </ClerkProvider>
   );

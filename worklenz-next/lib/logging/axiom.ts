@@ -8,11 +8,19 @@ const axiom = new Axiom({
 const dataset = process.env.AXIOM_DATASET ?? "prelim";
 
 export async function logInfo(event: string, data: Record<string, unknown>) {
-  await axiom.ingest(dataset, [{ level: "info", event, ...data }]);
-  await axiom.flush();
+  try {
+    axiom.ingest(dataset, [{ level: "info", event, ...data }]);
+    await axiom.flush();
+  } catch (err) {
+    console.error("axiom.logInfo failed", { event, err });
+  }
 }
 
 export async function logError(event: string, data: Record<string, unknown>) {
-  await axiom.ingest(dataset, [{ level: "error", event, ...data }]);
-  await axiom.flush();
+  try {
+    axiom.ingest(dataset, [{ level: "error", event, ...data }]);
+    await axiom.flush();
+  } catch (err) {
+    console.error("axiom.logError failed", { event, err, data });
+  }
 }

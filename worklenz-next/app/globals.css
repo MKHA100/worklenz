@@ -18,7 +18,18 @@ body {
   color: var(--text);
 }
 
-a {
+.unstyled-link {
   color: inherit;
   text-decoration: none;
+}
+
+a {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+a:hover,
+a:focus-visible {
+  text-decoration-thickness: 2px;
 }

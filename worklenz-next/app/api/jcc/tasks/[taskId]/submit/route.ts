@@ -25,6 +25,17 @@ export async function POST(_: Request, { params }: RouteContext) {
     return NextResponse.json({ error: "Task not found" }, { status: 404 });
   }
 
+  if (task.assigneeId !== profile.id) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  if (task.status !== "ASSIGNED" && task.status !== "REVISION_REQUIRED" && task.status !== "IN_PROGRESS") {
+    return NextResponse.json(
+      { error: `Cannot submit task in status ${task.status}` },
+      { status: 409 }
+    );
+  }
+
   const loggedMinutes = task.logs.reduce((sum, log) => sum + log.minutes, 0);
   if (loggedMinutes <= 0 && task.timeSpentMinute <= 0) {
     return NextResponse.json({ error: "Cannot submit without a time log" }, { status: 400 });

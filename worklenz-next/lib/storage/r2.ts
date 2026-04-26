@@ -12,10 +12,16 @@ const r2Client = new S3Client({
 
 const r2Bucket = process.env.CLOUDFLARE_R2_BUCKET ?? "";
 
-export async function createSignedUploadUrl(key: string, expiresInSeconds = 300) {
+export async function createSignedUploadUrl(
+  key: string,
+  expiresInSeconds = 300,
+  opts: { contentType?: string; contentLength?: number } = {}
+) {
   const command = new PutObjectCommand({
     Bucket: r2Bucket,
-    Key: key
+    Key: key,
+    ContentType: opts.contentType,
+    ContentLength: opts.contentLength
   });
   return getSignedUrl(r2Client, command, { expiresIn: expiresInSeconds });
 }

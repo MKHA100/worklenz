@@ -13,16 +13,16 @@ const supabaseAdmin = createClient(
 
 export async function publishRealtimeEvent(input: PublishEventInput) {
   const channel = supabaseAdmin.channel(input.channel);
-
-  const status = await channel.send({
-    type: "broadcast",
-    event: input.event,
-    payload: {
-      ...input.payload,
-      timestamp: new Date().toISOString()
-    }
-  });
-
-  await supabaseAdmin.removeChannel(channel);
-  return status;
+  try {
+    return await channel.send({
+      type: "broadcast",
+      event: input.event,
+      payload: {
+        ...input.payload,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } finally {
+    await supabaseAdmin.removeChannel(channel);
+  }
 }

@@ -57,19 +57,23 @@ export async function POST(request: Request) {
     const fullName =
       [clerkUser.first_name, clerkUser.last_name].filter(Boolean).join(" ") || null;
     const metaRole = clerkUser.public_metadata?.role;
-    const role = typeof metaRole === "string" ? metaRole : "qs";
+    const explicitRole = typeof metaRole === "string" ? metaRole : null;
 
     try {
       await prisma.userProfile.upsert({
         where: { clerkId: clerkUser.id },
-        update: { email, fullName, role },
-        create: { clerkId: clerkUser.id, email, fullName, role }
+        update: {
+          email,
+          fullName,
+          ...(explicitRole ? { role: explicitRole } : {})
+        },
+        create: { clerkId: clerkUser.id, email, fullName, role: explicitRole ?? "qs" }
       });
 
       await logInfo("webhook.clerk.userSync", {
         clerkId: clerkUser.id,
         email,
-        role,
+        role: explicitRole ?? "(unchanged)",
         event: event.type
       });
     } catch (error) {

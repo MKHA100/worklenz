@@ -29,7 +29,7 @@ export async function GET(_: Request, { params }: RouteContext) {
       take: 250
     });
 
-    await redis().set(cacheKey, tasks, { ex: 60 });
+    await redis().set(cacheKey, tasks, { ex: 60, nx: true });
     await logInfo("api.project.tasks.list", { projectId, count: tasks.length });
 
     return NextResponse.json({ source: "db", data: tasks });

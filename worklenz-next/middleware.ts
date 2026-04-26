@@ -21,7 +21,8 @@ const isPublicApiRoute = createRouteMatcher([
 
 export default clerkMiddleware(async (auth, req) => {
   if (isPublicApiRoute(req)) return;
-  if (isProtectedRoute(req)) {
+  // Default-deny: all /api routes and explicit protected UI routes require auth.
+  if (isProtectedRoute(req) || req.nextUrl.pathname.startsWith("/api/")) {
     await auth.protect();
   }
 });

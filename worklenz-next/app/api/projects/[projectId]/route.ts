@@ -60,3 +60,15 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
   await logInfo("api.projects.update", { projectId, actor: profile.id });
   return NextResponse.json({ data: project });
 }
+
+export async function DELETE(_: NextRequest, { params }: RouteContext) {
+  const profile = await requireUserProfile();
+  if (!profile) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { projectId } = await params;
+  await prisma.project.delete({ where: { id: projectId } });
+  await logInfo("api.projects.delete", { projectId, actor: profile.id });
+  return NextResponse.json({ ok: true });
+}

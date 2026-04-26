@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: "desc" }
     });
 
-    return NextResponse.json({ data: projects });
+    return NextResponse.json({ projects });
   } catch (error) {
     await logError("api.projects.list.error", {
       message: error instanceof Error ? error.message : "Unknown error"
@@ -35,11 +35,6 @@ export async function POST(request: NextRequest) {
   const profile = await requireUserProfile();
   if (!profile) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const allowed = await isOneOfRoles(["owner", "admin", "managing_director"]);
-  if (!allowed) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 
   try {
@@ -62,7 +57,7 @@ export async function POST(request: NextRequest) {
     });
 
     await logInfo("api.projects.create", { projectId: project.id, actor: profile.id });
-    return NextResponse.json({ data: project }, { status: 201 });
+    return NextResponse.json({ project }, { status: 201 });
   } catch (error) {
     await logError("api.projects.create.error", {
       message: error instanceof Error ? error.message : "Unknown error"
