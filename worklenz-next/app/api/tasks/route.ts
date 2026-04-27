@@ -17,7 +17,10 @@ export async function POST(request: NextRequest) {
     tradeCode?: string;
     unit?: string;
     plannedRate?: number;
+    priority?: string;
+    startDate?: string | null;
     dueDate?: string | null;
+    timeEstimate?: number | null;
     requiresReview?: boolean;
   };
 
@@ -43,7 +46,10 @@ export async function POST(request: NextRequest) {
         tradeCode: body.tradeCode ?? null,
         unit: body.unit ?? null,
         plannedRate: body.plannedRate ?? null,
+        priority: body.priority ?? "NORMAL",
+        startDate: body.startDate ? new Date(body.startDate) : null,
         dueDate: body.dueDate ? new Date(body.dueDate) : null,
+        timeEstimate: body.timeEstimate ?? null,
         requiresReview
       },
       include: {

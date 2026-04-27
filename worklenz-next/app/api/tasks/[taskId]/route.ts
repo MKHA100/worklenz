@@ -30,6 +30,11 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
     timeSpentMinute?: number;
     unit?: string | null;
     tradeCode?: string | null;
+    priority?: string | null;
+    startDate?: string | null;
+    dueDate?: string | null;
+    timeEstimate?: number | null;
+    requiresReview?: boolean;
   };
 
   if (body.status && !ALLOWED_STATUSES.includes(body.status)) {
@@ -56,7 +61,12 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
       ...(body.actualRate !== undefined ? { actualRate: body.actualRate } : {}),
       ...(body.timeSpentMinute !== undefined ? { timeSpentMinute: body.timeSpentMinute } : {}),
       ...(body.unit !== undefined ? { unit: body.unit } : {}),
-      ...(body.tradeCode !== undefined ? { tradeCode: body.tradeCode } : {})
+      ...(body.tradeCode !== undefined ? { tradeCode: body.tradeCode } : {}),
+      ...(body.priority !== undefined ? { priority: body.priority ?? "NORMAL" } : {}),
+      ...(body.startDate !== undefined ? { startDate: body.startDate ? new Date(body.startDate) : null } : {}),
+      ...(body.dueDate !== undefined ? { dueDate: body.dueDate ? new Date(body.dueDate) : null } : {}),
+      ...(body.timeEstimate !== undefined ? { timeEstimate: body.timeEstimate } : {}),
+      ...(body.requiresReview !== undefined ? { requiresReview: body.requiresReview } : {})
     },
     include: { assignee: { select: { id: true, fullName: true, email: true } } }
   });

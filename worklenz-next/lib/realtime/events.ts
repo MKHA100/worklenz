@@ -19,15 +19,16 @@ export function subscribeToProjectEvents(projectId: string, onEvent: (event: Wor
       {
         event: "*",
         schema: "public",
-        table: "tasks",
-        filter: `project_id=eq.${projectId}`
+        table: "Task",
+        filter: `projectId=eq.${projectId}`
       },
       (payload) => {
+        const row = (payload.new ?? payload.old ?? {}) as Record<string, unknown>;
         onEvent({
           event: payload.eventType,
           entity: "task",
-          id: String(payload.new?.id ?? payload.old?.id ?? ""),
-          payload: payload.new ?? payload.old ?? {},
+          id: String(row["id"] ?? ""),
+          payload: row,
           actor: "system",
           timestamp: new Date().toISOString()
         });

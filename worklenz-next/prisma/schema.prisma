@@ -76,7 +76,10 @@ model Task {
   submissionNote  String?
   reviewComment   String?
   reviewOutcome   String?
+  priority        String         @default("NORMAL")
+  startDate       DateTime?
   dueDate         DateTime?
+  timeEstimate    Int?
   requiresReview  Boolean        @default(true)
   submittedAt     DateTime?
   reviewedAt      DateTime?

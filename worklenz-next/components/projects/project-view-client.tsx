@@ -4,18 +4,22 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Tabs, Table, Tag, Button, Modal, Form, Input, Select, Space,
   Typography, Flex, Drawer, Descriptions, Divider, Progress,
-  Avatar, Tooltip, Badge, App, Card, Empty, Statistic, Upload
+  Avatar, Tooltip, Badge, App, Card, Empty, Statistic, Upload, Switch,
+  DatePicker, InputNumber
 } from "antd";
 import {
   PlusOutlined, UnorderedListOutlined, AppstoreOutlined,
   TeamOutlined, UserOutlined, ClockCircleOutlined,
   CheckOutlined, RollbackOutlined, StopOutlined, PauseOutlined,
   PlayCircleOutlined, PauseCircleOutlined, UploadOutlined,
-  PaperClipOutlined, DeleteOutlined
+  PaperClipOutlined, DeleteOutlined, CalendarOutlined, FlagFilled
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { UploadFile, UploadProps } from "antd/es/upload";
+import dayjs from "dayjs";
 import { SubmissionTimeline } from "@/components/review/submission-timeline";
+import { PriorityFlag, PRIORITIES } from "@/components/tasks/priority-flag";
+import { useProjectEvents } from "@/lib/realtime/use-project-events";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -25,10 +29,20 @@ const STATUS_COLORS: Record<string, string> = {
   REJECTED: "error", QUERY_RAISED: "gold", EXTENSION_REQUESTED: "cyan"
 };
 const STATUS_LABELS: Record<string, string> = {
-  ASSIGNED: "Assigned", IN_PROGRESS: "In Progress", SUBMITTED: "Submitted",
+  ASSIGNED: "To Do", IN_PROGRESS: "In Progress", SUBMITTED: "Submitted",
   REVISION_REQUIRED: "Revision Required", ON_HOLD: "On Hold",
-  APPROVED: "Approved", Rejected: "Rejected", REJECTED: "Rejected",
+  APPROVED: "Approved", REJECTED: "Rejected",
   QUERY_RAISED: "Query Raised", EXTENSION_REQUESTED: "Extension Requested"
+};
+
+const KANBAN_COL_STYLE: Record<string, { bg: string; headerColor: string }> = {
+  ASSIGNED:           { bg: "#f5f5f5",  headerColor: "#595959" },
+  IN_PROGRESS:        { bg: "#fff7e6",  headerColor: "#fa8c16" },
+  SUBMITTED:          { bg: "#f9f0ff",  headerColor: "#722ed1" },
+  REVISION_REQUIRED:  { bg: "#fff2e8",  headerColor: "#d4380d" },
+  ON_HOLD:            { bg: "#fafafa",  headerColor: "#8c8c8c" },
+  APPROVED:           { bg: "#f6ffed",  headerColor: "#389e0d" },
+  REJECTED:           { bg: "#fff1f0",  headerColor: "#cf1322" }
 };
 
 const ALL_STATUSES = ["ASSIGNED", "IN_PROGRESS", "QUERY_RAISED", "EXTENSION_REQUESTED",
@@ -48,6 +62,7 @@ type Submission = {
   attachments: Attachment[];
 };
 
+type TimeLog = { id: string; startedAt: string; endedAt: string | null; minutes: number; createdAt: string };
 type TaskMemberUser = { id: string; fullName: string | null; email: string };
 
 type Task = {
@@ -58,11 +73,14 @@ type Task = {
   revisionCount: number; timeSpentMinute: number; plannedRate: number | null;
   actualRate: number | null; efficiency: number | null; variance: number | null;
   unit: string | null; tradeCode: string | null;
+  priority: string; startDate: string | null; dueDate: string | null; timeEstimate: number | null;
+  requiresReview: boolean;
   createdAt: string; updatedAt: string; assignee: Assignee;
   taskMemberIds: string[];
   taskMemberUsers: TaskMemberUser[];
   attachments: Attachment[];
   submissions: Submission[];
+  timeLogs?: TimeLog[];
 };
 
 type Member = { id: string; fullName: string | null; email: string; role: string };
@@ -79,6 +97,21 @@ type Props = {
 
 const MANAGER_ROLES = ["owner", "admin", "managing_director", "senior_qs"];
 
+function formatMinutes(min: number) {
+  const h = Math.floor(min / 60), m = min % 60;
+  return `${h}h ${m}m`;
+}
+
+function isPast(dateStr: string | null) {
+  if (!dateStr) return false;
+  return new Date(dateStr) < new Date();
+}
+
+function formatDate(dateStr: string | null) {
+  if (!dateStr) return null;
+  return dayjs(dateStr).format("DD MMM YYYY");
+}
+
 export function ProjectViewClient({ currentUserId, userRole, project, initialTasks, members: initialMembers, seniors, allUsers }: Props) {
   const { message } = App.useApp();
   const isReviewer = REVIEWER_ROLES.includes(userRole);
@@ -90,6 +123,9 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
   const [addingMember, setAddingMember] = useState(false);
   const [editTradeCode, setEditTradeCode] = useState("");
   const [editUnit, setEditUnit] = useState("");
+  const [editDueDate, setEditDueDate] = useState<dayjs.Dayjs | null>(null);
+  const [editStartDate, setEditStartDate] = useState<dayjs.Dayjs | null>(null);
+  const [editTimeEstimate, setEditTimeEstimate] = useState<number | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -98,36 +134,42 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
   const [submissionNote, setSubmissionNote] = useState("");
   const [selectedReviewerId, setSelectedReviewerId] = useState<string | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
+  const [timeLogs, setTimeLogs] = useState<TimeLog[]>([]);
   const [form] = Form.useForm();
 
-  // File upload state
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
 
-  // ---------------------------------------------------------------------------
-  // Timer — key insight: timerSessionSec tracks ONLY new seconds this session.
-  // Display = task.timeSpentMinute * 60 + timerSessionSec
-  // timerTaskId tracks which task is being timed, independently of which drawer is open.
-  // Opening the same task again does NOT reset the timer.
-  // ---------------------------------------------------------------------------
+  // Timer state
   const [timerRunning, setTimerRunning] = useState(false);
   const [timerTaskId, setTimerTaskId] = useState<string | null>(null);
   const [timerSessionSec, setTimerSessionSec] = useState(0);
+  const [timerStartedAt, setTimerStartedAt] = useState<Date | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Stable ref to always have fresh timerSessionSec in stopTimer closure
   const timerSessionSecRef = useRef(0);
   useEffect(() => { timerSessionSecRef.current = timerSessionSec; }, [timerSessionSec]);
-
   useEffect(() => {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, []);
+
+  // Realtime: merge updated tasks from postgres_changes
+  useProjectEvents(project.id, (event) => {
+    if (event.event === "UPDATE" || event.event === "INSERT") {
+      const row = event.payload as Record<string, unknown> & { id?: string };
+      if (!row.id) return;
+      if (event.event === "UPDATE") {
+        setTasks((prev) => prev.map((t) => t.id === row.id ? { ...t, ...(row as Partial<Task>) } : t));
+        setSelectedTask((prev) => (prev?.id === row.id ? ({ ...prev, ...(row as Partial<Task>) } as Task) : prev));
+      }
+    }
+  });
 
   function startTimer(task: Task) {
     if (timerRef.current) clearInterval(timerRef.current);
     setTimerTaskId(task.id);
     setTimerSessionSec(0);
     timerSessionSecRef.current = 0;
+    setTimerStartedAt(new Date());
     setTimerRunning(true);
     timerRef.current = setInterval(() => {
       setTimerSessionSec((s) => s + 1);
@@ -140,16 +182,34 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     setTimerTaskId(null);
 
     const elapsed = Math.round(timerSessionSecRef.current / 60);
+    const startedAt = timerStartedAt;
+    const endedAt = new Date();
+    setTimerStartedAt(null);
+
     if (elapsed < 1) { message.warning("Minimum 1 minute to log"); setTimerSessionSec(0); return; }
 
     try {
       const newMinutes = task.timeSpentMinute + elapsed;
       await patchTask(task.id, { timeSpentMinute: newMinutes });
+
+      // Create TaskTimeLog record
+      if (startedAt) {
+        const logRes = await fetch(`/api/tasks/${task.id}/time-logs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString(), minutes: elapsed })
+        });
+        if (logRes.ok) {
+          const { log } = await logRes.json() as { log: TimeLog };
+          setTimeLogs((prev) => [log, ...prev]);
+        }
+      }
+
       message.success(`Logged ${elapsed} minute${elapsed !== 1 ? "s" : ""}`);
       setTimerSessionSec(0);
     } catch { message.error("Failed to log time"); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [timerStartedAt]);
 
   function formatTimer(task: Task | null) {
     const base = (task?.timeSpentMinute ?? 0) * 60;
@@ -161,7 +221,6 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
   }
 
   function openTask(task: Task) {
-    // If timer is running for a DIFFERENT task: stop it (don't save — user chose to switch)
     if (timerRunning && timerTaskId !== task.id) {
       if (timerRef.current) clearInterval(timerRef.current);
       setTimerRunning(false);
@@ -169,15 +228,24 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
       setTimerSessionSec(0);
       message.warning("Timer stopped — switch task without saving");
     }
-    // DON'T reset timer state if same task — timer keeps running across close/reopen
     setSelectedTask(task);
     setReviewComment("");
     setSubmissionNote("");
     setSelectedReviewerId(task.reviewerId ?? undefined);
     setEditTradeCode(task.tradeCode ?? "");
     setEditUnit(task.unit ?? "");
+    setEditDueDate(task.dueDate ? dayjs(task.dueDate) : null);
+    setEditStartDate(task.startDate ? dayjs(task.startDate) : null);
+    setEditTimeEstimate(task.timeEstimate ?? null);
     setFileList([]);
+    setTimeLogs([]);
     setDrawerOpen(true);
+
+    // Fetch session history
+    fetch(`/api/tasks/${task.id}/time-logs`)
+      .then((r) => r.json())
+      .then(({ logs }: { logs: TimeLog[] }) => setTimeLogs(logs))
+      .catch(() => {});
   }
 
   async function patchTask(taskId: string, body: Record<string, unknown>) {
@@ -200,6 +268,15 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     } catch { message.error("Update failed"); }
   }
 
+  async function handleMarkComplete() {
+    if (!selectedTask) return;
+    try {
+      await patchTask(selectedTask.id, { status: "APPROVED" });
+      message.success("Marked as complete");
+      setDrawerOpen(false);
+    } catch { message.error("Action failed"); }
+  }
+
   async function handleReviewAction(action: "approve" | "revision" | "reject" | "on_hold") {
     if (!selectedTask) return;
     const statusMap = { approve: "APPROVED", revision: "REVISION_REQUIRED", reject: "REJECTED", on_hold: "ON_HOLD" };
@@ -211,13 +288,10 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     } catch { message.error("Action failed"); }
   }
 
-  // Upload a single file to R2 via the sign endpoint
-  // Server-side upload: Next.js → R2 (avoids browser CORS on direct presigned PUT)
   async function uploadFileToR2(file: File, taskId: string): Promise<{ fileKey: string; fileName: string; mimeType: string; fileSize: number }> {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("taskId", taskId);
-
     const res = await fetch("/api/files/upload", { method: "POST", body: fd });
     if (!res.ok) {
       const err = await res.json().catch(() => ({})) as { error?: string };
@@ -230,9 +304,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     if (!selectedTask) return;
     setSubmitting(true);
     setUploadingFiles(true);
-
     try {
-      // 1. Upload all pending files to R2 and create attachment records
       const pendingFiles = fileList.filter((f) => f.originFileObj);
       for (const uf of pendingFiles) {
         const file = uf.originFileObj as File;
@@ -244,13 +316,9 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
         });
         if (!attRes.ok) throw new Error("Failed to save attachment record");
         const { attachment } = await attRes.json() as { attachment: Attachment };
-        // Optimistically add attachment to task
         setSelectedTask((prev) => prev ? { ...prev, attachments: [...prev.attachments, attachment] } : prev);
-        setTasks((prev) => prev.map((t) => t.id === selectedTask.id
-          ? { ...t, attachments: [...t.attachments, attachment] } : t));
+        setTasks((prev) => prev.map((t) => t.id === selectedTask.id ? { ...t, attachments: [...t.attachments, attachment] } : t));
       }
-
-      // 2. Submit the task
       const submitRes = await fetch(`/api/jcc/tasks/${selectedTask.id}/submit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -298,11 +366,21 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     } catch (e) { message.error(e instanceof Error ? e.message : "Failed to remove member"); }
   }
 
-  async function handleCreate(values: { title: string; assigneeIds?: string[]; status?: string; tradeCode?: string[]; unit?: string }) {
+  async function handleCreate(values: {
+    title: string;
+    assigneeIds?: string[];
+    status?: string;
+    tradeCode?: string[];
+    unit?: string;
+    priority?: string;
+    startDate?: dayjs.Dayjs | null;
+    dueDate?: dayjs.Dayjs | null;
+    timeEstimate?: number | null;
+    requiresReview?: boolean;
+  }) {
     setCreating(true);
     try {
       const assigneeIds = values.assigneeIds ?? [];
-      // tradeCode comes as string[] from tags select — take first entry
       const tradeCode = Array.isArray(values.tradeCode) ? (values.tradeCode[0] ?? null) : (values.tradeCode ?? null);
       const res = await fetch("/api/tasks", {
         method: "POST",
@@ -313,16 +391,21 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
           status: values.status ?? "ASSIGNED",
           assigneeIds,
           tradeCode,
-          unit: values.unit ?? null
+          unit: values.unit ?? null,
+          priority: values.priority ?? "NORMAL",
+          startDate: values.startDate ? values.startDate.toISOString() : null,
+          dueDate: values.dueDate ? values.dueDate.toISOString() : null,
+          timeEstimate: values.timeEstimate ?? null,
+          requiresReview: values.requiresReview ?? true
         })
       });
       if (!res.ok) throw new Error("Create failed");
       const { task } = await res.json() as { task: Task };
-      const primaryAssignee = members.find((m) => m.id === task.assigneeId) ?? null;
       const taskMemberUsers = assigneeIds.map((uid) => {
         const m = members.find((x) => x.id === uid);
         return m ? { id: m.id, fullName: m.fullName, email: m.email } : null;
       }).filter(Boolean) as TaskMemberUser[];
+      const primaryAssignee = members.find((m) => m.id === task.assigneeId) ?? null;
       setTasks((prev) => [{
         ...task,
         assignee: primaryAssignee ? { id: primaryAssignee.id, fullName: primaryAssignee.fullName, email: primaryAssignee.email } : null,
@@ -331,7 +414,10 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
         attachments: [], submissions: [], submittedAt: null, reviewedAt: null, reviewComment: null,
         reviewOutcome: null, submissionNote: null, reviewerId: null,
         revisionCount: 0, timeSpentMinute: 0, plannedRate: null, actualRate: null,
-        efficiency: null, variance: null, unit: task.unit ?? null, tradeCode: task.tradeCode ?? null
+        efficiency: null, variance: null, unit: task.unit ?? null, tradeCode: task.tradeCode ?? null,
+        priority: task.priority ?? "NORMAL",
+        startDate: task.startDate ?? null, dueDate: task.dueDate ?? null,
+        timeEstimate: task.timeEstimate ?? null, requiresReview: task.requiresReview ?? true
       }, ...prev]);
       message.success("Task created");
       form.resetFields();
@@ -345,21 +431,19 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
       const res = await fetch(`/api/tasks/${taskId}/attachments?id=${attachmentId}`, { method: "DELETE" });
       if (!res.ok) throw new Error();
       setSelectedTask((prev) => prev ? { ...prev, attachments: prev.attachments.filter((a) => a.id !== attachmentId) } : prev);
-      setTasks((prev) => prev.map((t) => t.id === taskId
-        ? { ...t, attachments: t.attachments.filter((a) => a.id !== attachmentId) } : t));
+      setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, attachments: t.attachments.filter((a) => a.id !== attachmentId) } : t));
     } catch { message.error("Failed to delete attachment"); }
   }
 
   const uploadProps: UploadProps = {
     fileList,
-    beforeUpload: () => false, // manual upload on submit
+    beforeUpload: () => false,
     onChange: ({ fileList: fl }) => setFileList(fl),
     multiple: true,
     maxCount: 10,
     showUploadList: false
   };
 
-  // Task list columns
   const taskColumns: ColumnsType<Task> = [
     {
       title: "Title", dataIndex: "title", key: "title",
@@ -379,8 +463,19 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
               <ClockCircleOutlined style={{ color: "#1677ff", fontSize: 12 }} />
             </Tooltip>
           )}
+          {!record.requiresReview && (
+            <Tooltip title="Action Item (no review required)">
+              <Tag color="purple" style={{ fontSize: 10, lineHeight: "16px", padding: "0 4px" }}>NOTE</Tag>
+            </Tooltip>
+          )}
         </Flex>
       )
+    },
+    {
+      title: "Priority", key: "priority", width: 80,
+      filters: PRIORITIES.map((p) => ({ text: p, value: p })),
+      onFilter: (v, r) => r.priority === v,
+      render: (_, r) => <PriorityFlag priority={r.priority ?? "NORMAL"} />
     },
     {
       title: "Status", dataIndex: "status", key: "status", width: 170,
@@ -389,11 +484,22 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
       render: (status: string) => <Tag color={STATUS_COLORS[status] ?? "default"}>{STATUS_LABELS[status] ?? status}</Tag>
     },
     {
+      title: "Due Date", key: "dueDate", width: 130,
+      render: (_, r) => {
+        if (!r.dueDate) return <CalendarOutlined style={{ color: "#d9d9d9" }} />;
+        const overdue = isPast(r.dueDate) && !["APPROVED", "REJECTED"].includes(r.status);
+        return (
+          <Text style={{ fontSize: 12, color: overdue ? "#ff4d4f" : "#595959" }}>
+            <CalendarOutlined style={{ marginRight: 4 }} />
+            {formatDate(r.dueDate)}
+          </Text>
+        );
+      }
+    },
+    {
       title: "Assignees", key: "assignee", width: 200,
       render: (_, record) => {
-        const users = record.taskMemberUsers.length > 0
-          ? record.taskMemberUsers
-          : record.assignee ? [record.assignee] : [];
+        const users = record.taskMemberUsers.length > 0 ? record.taskMemberUsers : record.assignee ? [record.assignee] : [];
         if (users.length === 0) return <Text type="secondary" style={{ fontStyle: "italic" }}>Unassigned</Text>;
         return (
           <Flex gap={4} align="center" wrap="wrap">
@@ -402,18 +508,27 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                 <Avatar size={24} icon={<UserOutlined />} style={{ background: "#1677ff", fontSize: 11, cursor: "default" }} />
               </Tooltip>
             ))}
-            {users.length === 1 && (
-              <Text style={{ fontSize: 13 }}>{users[0].fullName ?? users[0].email}</Text>
-            )}
+            {users.length === 1 && <Text style={{ fontSize: 13 }}>{users[0].fullName ?? users[0].email}</Text>}
           </Flex>
         );
       }
     },
     {
-      title: "Time", dataIndex: "timeSpentMinute", key: "time", width: 100,
-      render: (min: number) => {
-        const h = Math.floor(min / 60), m = min % 60;
-        return <Text type="secondary" style={{ fontSize: 12 }}>{h}h {m}m</Text>;
+      title: "Time", key: "time", width: 120,
+      render: (_, r) => {
+        const actual = r.timeSpentMinute;
+        const estimate = r.timeEstimate;
+        if (!estimate) return <Text type="secondary" style={{ fontSize: 12 }}>{formatMinutes(actual)}</Text>;
+        const pct = Math.round((actual / estimate) * 100);
+        const color = pct >= 100 ? "#ff4d4f" : pct >= 80 ? "#faad14" : "#52c41a";
+        return (
+          <Tooltip title={`${formatMinutes(actual)} / ${formatMinutes(estimate)} (${pct}%)`}>
+            <Flex vertical gap={2}>
+              <Text style={{ fontSize: 11, color }}>{formatMinutes(actual)} / {formatMinutes(estimate)}</Text>
+              <Progress percent={Math.min(pct, 100)} size="small" strokeColor={color} showInfo={false} style={{ margin: 0 }} />
+            </Flex>
+          </Tooltip>
+        );
       }
     },
     {
@@ -480,21 +595,30 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
               <Flex gap={12} style={{ minWidth: 900, padding: "8px 0" }}>
                 {KANBAN_COLS.map((col) => {
                   const colTasks = tasks.filter((t) => t.status === col);
+                  const colStyle = KANBAN_COL_STYLE[col] ?? { bg: "#f5f5f5", headerColor: "#595959" };
                   return (
-                    <div key={col} style={{ flex: "0 0 220px", background: "#f5f5f5", borderRadius: 8, padding: 12 }}>
+                    <div key={col} style={{ flex: "0 0 220px", background: colStyle.bg, borderRadius: 8, padding: 12, borderTop: `3px solid ${colStyle.headerColor}` }}>
                       <Flex justify="space-between" align="center" style={{ marginBottom: 8 }}>
-                        <Text strong style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                        <Text strong style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em", color: colStyle.headerColor }}>
                           {STATUS_LABELS[col]}
                         </Text>
-                        <Badge count={colTasks.length} color={STATUS_COLORS[col] === "default" ? "#8c8c8c" : undefined} />
+                        <Badge count={colTasks.length} color={colStyle.headerColor} />
                       </Flex>
                       <Flex vertical gap={8}>
                         {colTasks.length === 0 && <Empty description="" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: "8px 0" }} />}
                         {colTasks.map((t) => (
-                          <Card key={t.id} size="small" hoverable onClick={() => openTask(t)} style={{ borderRadius: 6, cursor: "pointer" }}>
+                          <Card key={t.id} size="small" hoverable onClick={() => openTask(t)} style={{ borderRadius: 6, cursor: "pointer", background: "#fff" }}>
                             <Text style={{ fontSize: 13, fontWeight: 500 }}>{t.title}</Text>
+                            <Flex gap={6} align="center" style={{ marginTop: 6 }}>
+                              <PriorityFlag priority={t.priority ?? "NORMAL"} />
+                              {t.dueDate && (
+                                <Text style={{ fontSize: 11, color: isPast(t.dueDate) && !["APPROVED","REJECTED"].includes(t.status) ? "#ff4d4f" : "#8c8c8c" }}>
+                                  <CalendarOutlined /> {formatDate(t.dueDate)}
+                                </Text>
+                              )}
+                            </Flex>
                             {t.assignee && (
-                              <Flex gap={4} align="center" style={{ marginTop: 6 }}>
+                              <Flex gap={4} align="center" style={{ marginTop: 4 }}>
                                 <Avatar size={16} icon={<UserOutlined />} style={{ fontSize: 10, background: "#1677ff" }} />
                                 <Text type="secondary" style={{ fontSize: 11 }}>{t.assignee.fullName ?? t.assignee.email}</Text>
                               </Flex>
@@ -503,6 +627,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                               {t.revisionCount > 0 && <Tag color="orange" style={{ fontSize: 10 }}>{t.revisionCount} rev</Tag>}
                               {t.attachments.length > 0 && <Tag icon={<PaperClipOutlined />} style={{ fontSize: 10 }}>{t.attachments.length}</Tag>}
                               {timerRunning && timerTaskId === t.id && <Tag color="blue" style={{ fontSize: 10 }}>⏱</Tag>}
+                              {!t.requiresReview && <Tag color="purple" style={{ fontSize: 10 }}>NOTE</Tag>}
                             </Flex>
                           </Card>
                         ))}
@@ -531,12 +656,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                       .filter((u) => !members.some((m) => m.id === u.id))
                       .map((u) => ({ value: u.id, label: `${u.fullName ?? u.email} (${u.role.replace(/_/g, " ")})` }))}
                   />
-                  <Button
-                    type="primary" icon={<PlusOutlined />}
-                    loading={addingMember}
-                    disabled={!addMemberId}
-                    onClick={handleAddMember}
-                  >
+                  <Button type="primary" icon={<PlusOutlined />} loading={addingMember} disabled={!addMemberId} onClick={handleAddMember}>
                     Add
                   </Button>
                 </Flex>
@@ -573,10 +693,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                     render: (_: unknown, m: Member) => (
                       m.role === "managing_director" ? null : (
                         <Tooltip title="Remove from project">
-                          <Button
-                            size="small" danger type="text" icon={<DeleteOutlined />}
-                            onClick={() => handleRemoveMember(m.id)}
-                          />
+                          <Button size="small" danger type="text" icon={<DeleteOutlined />} onClick={() => handleRemoveMember(m.id)} />
                         </Tooltip>
                       )
                     )
@@ -596,6 +713,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
           <Flex gap={8} align="center">
             <Text strong>{selectedTask?.title}</Text>
             {selectedTask && <Tag color={STATUS_COLORS[selectedTask.status] ?? "default"}>{STATUS_LABELS[selectedTask.status] ?? selectedTask.status}</Tag>}
+            {selectedTask && <PriorityFlag priority={selectedTask.priority ?? "NORMAL"} />}
           </Flex>
         }
         open={drawerOpen}
@@ -615,7 +733,6 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
       >
         {selectedTask && (
           <div>
-            {/* Description */}
             {selectedTask.description && (
               <>
                 <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Description</Text>
@@ -627,14 +744,25 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
             {/* Meta */}
             <Descriptions column={1} size="small" style={{ marginBottom: 12 }}>
               <Descriptions.Item label="Assignee">
-                {selectedTask.assignee ? (selectedTask.assignee.fullName ?? selectedTask.assignee.email) : "Unassigned"}
+                {selectedTask.taskMemberUsers.length > 0
+                  ? selectedTask.taskMemberUsers.map((u) => u.fullName ?? u.email).join(", ")
+                  : selectedTask.assignee ? (selectedTask.assignee.fullName ?? selectedTask.assignee.email) : "Unassigned"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Priority">
+                <Flex gap={6} align="center">
+                  <PriorityFlag priority={selectedTask.priority ?? "NORMAL"} />
+                  <Select
+                    size="small"
+                    value={selectedTask.priority ?? "NORMAL"}
+                    style={{ width: 110 }}
+                    options={PRIORITIES.map((p) => ({ value: p, label: p }))}
+                    onChange={(v) => patchTask(selectedTask.id, { priority: v }).catch(() => {})}
+                  />
+                </Flex>
               </Descriptions.Item>
               <Descriptions.Item label="Trade Code">
                 <Input
-                  variant="borderless"
-                  size="small"
-                  value={editTradeCode}
-                  placeholder="—"
+                  variant="borderless" size="small" value={editTradeCode} placeholder="—"
                   onChange={(e) => setEditTradeCode(e.target.value)}
                   onBlur={() => {
                     if (editTradeCode !== (selectedTask.tradeCode ?? "")) {
@@ -646,10 +774,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
               </Descriptions.Item>
               <Descriptions.Item label="Norm">
                 <Input
-                  variant="borderless"
-                  size="small"
-                  value={editUnit}
-                  placeholder="—"
+                  variant="borderless" size="small" value={editUnit} placeholder="—"
                   onChange={(e) => setEditUnit(e.target.value)}
                   onBlur={() => {
                     if (editUnit !== (selectedTask.unit ?? "")) {
@@ -659,13 +784,51 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                   style={{ padding: 0, width: "100%" }}
                 />
               </Descriptions.Item>
+              <Descriptions.Item label="Start Date">
+                <DatePicker
+                  size="small" value={editStartDate} allowClear
+                  onChange={(d) => {
+                    setEditStartDate(d);
+                    patchTask(selectedTask.id, { startDate: d ? d.toISOString() : null }).catch(() => {});
+                  }}
+                  style={{ width: "100%" }}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="Due Date">
+                <DatePicker
+                  size="small" value={editDueDate} allowClear
+                  onChange={(d) => {
+                    setEditDueDate(d);
+                    patchTask(selectedTask.id, { dueDate: d ? d.toISOString() : null }).catch(() => {});
+                  }}
+                  style={{ width: "100%" }}
+                  status={editDueDate && editDueDate.isBefore(dayjs()) ? "error" : undefined}
+                />
+              </Descriptions.Item>
+              <Descriptions.Item label="Estimate">
+                <InputNumber
+                  size="small" min={0} value={editTimeEstimate}
+                  placeholder="Minutes"
+                  style={{ width: "100%" }}
+                  onChange={(v) => setEditTimeEstimate(v)}
+                  onBlur={() => {
+                    patchTask(selectedTask.id, { timeEstimate: editTimeEstimate }).catch(() => {});
+                  }}
+                  addonAfter="min"
+                />
+              </Descriptions.Item>
               <Descriptions.Item label="Time Logged">
-                {Math.floor(selectedTask.timeSpentMinute / 60)}h {selectedTask.timeSpentMinute % 60}m
+                {formatMinutes(selectedTask.timeSpentMinute)}
+                {selectedTask.timeEstimate && (
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {" "}/ {formatMinutes(selectedTask.timeEstimate)} ({Math.round((selectedTask.timeSpentMinute / selectedTask.timeEstimate) * 100)}%)
+                  </Text>
+                )}
               </Descriptions.Item>
               <Descriptions.Item label="Revisions">{selectedTask.revisionCount}</Descriptions.Item>
             </Descriptions>
 
-            {/* ---- Time Tracker (always visible) ---- */}
+            {/* Time Tracker */}
             <Divider />
             <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Time Tracker</Text>
             <Card size="small" style={{ marginTop: 8, background: isTimerActiveForSelected ? "#f0f9ff" : "#fafafa", borderRadius: 8 }}>
@@ -677,79 +840,86 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                 />
                 <Space>
                   {!isTimerActiveForSelected ? (
-                    <Button
-                      type="primary" icon={<PlayCircleOutlined />}
-                      onClick={() => startTimer(selectedTask)}
-                      disabled={timerDisabled}
-                    >Start</Button>
+                    <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => startTimer(selectedTask)} disabled={timerDisabled}>Start</Button>
                   ) : (
-                    <Button danger icon={<PauseCircleOutlined />} onClick={() => stopTimer(selectedTask)}>
-                      Stop & Log
-                    </Button>
+                    <Button danger icon={<PauseCircleOutlined />} onClick={() => stopTimer(selectedTask)}>Stop & Log</Button>
                   )}
                 </Space>
               </Flex>
             </Card>
 
-            {/* ---- Submission history — visible to ALL roles ---- */}
+            {/* Session History */}
+            {timeLogs.length > 0 && (
+              <>
+                <div style={{ marginTop: 12 }}>
+                  <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Session History</Text>
+                  <div style={{ marginTop: 8, maxHeight: 160, overflowY: "auto" }}>
+                    {timeLogs.map((log) => (
+                      <Flex key={log.id} justify="space-between" align="center"
+                        style={{ padding: "4px 8px", borderRadius: 4, background: "#f5f5f5", marginBottom: 4, fontSize: 12 }}>
+                        <Text style={{ fontSize: 12 }}>
+                          {dayjs(log.startedAt).format("DD MMM HH:mm")}
+                          {log.endedAt ? ` → ${dayjs(log.endedAt).format("HH:mm")}` : ""}
+                        </Text>
+                        <Tag color="blue">{log.minutes} min</Tag>
+                      </Flex>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Submission history */}
             {selectedTask.submissions.length > 0 && (
               <>
                 <Divider />
-                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                  Submission History
-                </Text>
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Submission History</Text>
                 <div style={{ marginTop: 12 }}>
                   <SubmissionTimeline submissions={selectedTask.submissions} />
                 </div>
               </>
             )}
 
-            {/* ================================================================
-                QS PANEL — submit form (only when not submitted/approved/rejected)
-                Only for non-reviewer roles, and only for submittable statuses.
-                ================================================================ */}
-            {!isReviewer && QS_SUBMITTABLE.includes(selectedTask.status) && (
+            {/* Non-review: Mark Complete */}
+            {!selectedTask.requiresReview && !["APPROVED", "REJECTED"].includes(selectedTask.status) && (
               <>
                 <Divider />
-                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                  Submit for Review
-                </Text>
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Action Item</Text>
+                <div style={{ marginTop: 8 }}>
+                  <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
+                    This is an action item — no review required.
+                  </Text>
+                  <Button type="primary" block icon={<CheckOutlined />} onClick={handleMarkComplete}>
+                    Mark as Complete
+                  </Button>
+                </div>
+              </>
+            )}
 
-                {/* Reviewer selector */}
+            {/* QS Submit Panel */}
+            {selectedTask.requiresReview && !isReviewer && QS_SUBMITTABLE.includes(selectedTask.status) && (
+              <>
+                <Divider />
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Submit for Review</Text>
                 <div style={{ marginTop: 10 }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>Assign Reviewer (optional — if blank, all seniors can review)</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Assign Reviewer (optional)</Text>
                   <Select
-                    style={{ width: "100%", marginTop: 4 }}
-                    placeholder="Any available senior reviewer"
-                    allowClear
-                    value={selectedReviewerId}
-                    onChange={setSelectedReviewerId}
-                    options={seniors.map((s) => ({
-                      value: s.id,
-                      label: `${s.fullName ?? s.email} (${s.role.replace(/_/g, " ")})`
-                    }))}
+                    style={{ width: "100%", marginTop: 4 }} placeholder="Any available senior reviewer"
+                    allowClear value={selectedReviewerId} onChange={setSelectedReviewerId}
+                    options={seniors.map((s) => ({ value: s.id, label: `${s.fullName ?? s.email} (${s.role.replace(/_/g, " ")})` }))}
                   />
                 </div>
-
-                {/* Submission note */}
                 <div style={{ marginTop: 10 }}>
                   <Text type="secondary" style={{ fontSize: 12 }}>Submission Notes</Text>
-                  <Input.TextArea
-                    style={{ marginTop: 4 }}
-                    rows={3}
+                  <Input.TextArea style={{ marginTop: 4 }} rows={3}
                     placeholder="Describe what was completed, any assumptions, drawing refs..."
-                    value={submissionNote}
-                    onChange={(e) => setSubmissionNote(e.target.value)}
+                    value={submissionNote} onChange={(e) => setSubmissionNote(e.target.value)}
                   />
                 </div>
-
-                {/* File upload */}
                 <div style={{ marginTop: 10 }}>
                   <Text type="secondary" style={{ fontSize: 12 }}>Attach Documents</Text>
                   <Upload {...uploadProps} style={{ marginTop: 4 }}>
-                    <Button icon={<UploadOutlined />} style={{ marginTop: 4, width: "100%" }}>
-                      Select Files
-                    </Button>
+                    <Button icon={<UploadOutlined />} style={{ marginTop: 4, width: "100%" }}>Select Files</Button>
                   </Upload>
                   {fileList.length > 0 && (
                     <Flex vertical gap={4} style={{ marginTop: 8 }}>
@@ -760,69 +930,43 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                             <PaperClipOutlined />
                             <Text style={{ fontSize: 12 }}>{f.name}</Text>
                           </Flex>
-                          <Button
-                            type="text" size="small" danger icon={<DeleteOutlined />}
-                            onClick={() => setFileList((prev) => prev.filter((x) => x.uid !== f.uid))}
-                          />
+                          <Button type="text" size="small" danger icon={<DeleteOutlined />}
+                            onClick={() => setFileList((prev) => prev.filter((x) => x.uid !== f.uid))} />
                         </Flex>
                       ))}
                     </Flex>
                   )}
                 </div>
-
-                {/* Submit button */}
-                <Button
-                  type="primary" block
-                  style={{ marginTop: 16 }}
-                  loading={submitting || uploadingFiles}
-                  onClick={handleSubmitForReview}
-                >
+                <Button type="primary" block style={{ marginTop: 16 }} loading={submitting || uploadingFiles} onClick={handleSubmitForReview}>
                   {fileList.length > 0 ? `Upload ${fileList.length} file${fileList.length > 1 ? "s" : ""} & Submit` : "Submit for Review"}
                 </Button>
               </>
             )}
 
-            {/* ================================================================
-                REVIEWER PANEL — review actions (only for senior_qs and above)
-                Only shown when task is SUBMITTED.
-                ================================================================ */}
+            {/* Reviewer Panel */}
             {isReviewer && selectedTask.status === "SUBMITTED" && (
               <>
                 <Divider />
                 <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Review Actions</Text>
                 <div style={{ marginTop: 8 }}>
                   <Text type="secondary" style={{ fontSize: 12 }}>Review Comment</Text>
-                  <Input.TextArea
-                    style={{ marginTop: 4 }}
-                    value={reviewComment}
+                  <Input.TextArea style={{ marginTop: 4 }} value={reviewComment}
                     onChange={(e) => setReviewComment(e.target.value)}
-                    placeholder="Add review comment..."
-                    rows={3}
+                    placeholder="Add review comment..." rows={3}
                   />
                 </div>
                 <Space wrap style={{ marginTop: 12 }}>
-                  <Button
-                    type="primary" icon={<CheckOutlined />}
-                    onClick={() => handleReviewAction("approve")}
-                    style={{ background: "#52c41a", borderColor: "#52c41a" }}
-                  >Approve</Button>
-                  <Button
-                    icon={<RollbackOutlined />}
-                    onClick={() => handleReviewAction("revision")}
-                    style={{ color: "#fa8c16", borderColor: "#fa8c16" }}
-                  >Revision</Button>
+                  <Button type="primary" icon={<CheckOutlined />} onClick={() => handleReviewAction("approve")} style={{ background: "#52c41a", borderColor: "#52c41a" }}>Approve</Button>
+                  <Button icon={<RollbackOutlined />} onClick={() => handleReviewAction("revision")} style={{ color: "#fa8c16", borderColor: "#fa8c16" }}>Revision</Button>
                   <Button icon={<PauseOutlined />} onClick={() => handleReviewAction("on_hold")}>On Hold</Button>
                   <Button danger icon={<StopOutlined />} onClick={() => handleReviewAction("reject")}>Reject</Button>
                 </Space>
               </>
             )}
 
-            {/* Extra metadata */}
             <Descriptions column={1} size="small" style={{ marginTop: 16 }}>
               {selectedTask.submittedAt && (
-                <Descriptions.Item label="Submitted">
-                  {new Date(selectedTask.submittedAt).toLocaleDateString()}
-                </Descriptions.Item>
+                <Descriptions.Item label="Submitted">{new Date(selectedTask.submittedAt).toLocaleDateString()}</Descriptions.Item>
               )}
               {selectedTask.plannedRate != null && (
                 <Descriptions.Item label="Planned Rate">{selectedTask.plannedRate}</Descriptions.Item>
@@ -845,25 +989,30 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
           <Form.Item name="title" label="Task Title" rules={[{ required: true }]}>
             <Input placeholder="Describe the task..." />
           </Form.Item>
+          <Form.Item name="requiresReview" label="Task Type" valuePropName="checked" initialValue={true}>
+            <Switch checkedChildren="Review Required" unCheckedChildren="Action Item / Note" defaultChecked />
+          </Form.Item>
+          <Form.Item name="priority" label="Priority" initialValue="NORMAL">
+            <Select options={PRIORITIES.map((p) => ({
+              value: p,
+              label: (
+                <Flex gap={6} align="center">
+                  <FlagFilled style={{ color: { LOW: "#8c8c8c", NORMAL: "#1677ff", HIGH: "#faad14", URGENT: "#ff4d4f" }[p] }} />
+                  {p.charAt(0) + p.slice(1).toLowerCase()}
+                </Flex>
+              )
+            }))} />
+          </Form.Item>
           <Form.Item name="assigneeIds" label="Assign To (multiple allowed)">
             <Select
-              mode="multiple"
-              placeholder="Select one or more members"
-              allowClear
-              showSearch
-              filterOption={(input, opt) =>
-                (opt?.label?.toString() ?? "").toLowerCase().includes(input.toLowerCase())
-              }
+              mode="multiple" placeholder="Select one or more members" allowClear showSearch
+              filterOption={(input, opt) => (opt?.label?.toString() ?? "").toLowerCase().includes(input.toLowerCase())}
               options={members.map((m) => ({ value: m.id, label: m.fullName ?? m.email }))}
             />
           </Form.Item>
           <Form.Item name="tradeCode" label="Trade Code">
             <Select
-              mode="tags"
-              maxCount={1}
-              placeholder="Select or type your own trade code"
-              allowClear
-              tokenSeparators={[","]}
+              mode="tags" maxCount={1} placeholder="Select or type your own trade code" allowClear tokenSeparators={[","]}
               options={[
                 { value: "QS", label: "QS — Quantity Surveying" },
                 { value: "STRUCT", label: "STRUCT — Structural" },
@@ -878,6 +1027,17 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
           </Form.Item>
           <Form.Item name="unit" label="Norm">
             <Input placeholder="e.g. m², m³, lm..." />
+          </Form.Item>
+          <Flex gap={8}>
+            <Form.Item name="startDate" label="Start Date" style={{ flex: 1 }}>
+              <DatePicker style={{ width: "100%" }} />
+            </Form.Item>
+            <Form.Item name="dueDate" label="Due Date" style={{ flex: 1 }}>
+              <DatePicker style={{ width: "100%" }} />
+            </Form.Item>
+          </Flex>
+          <Form.Item name="timeEstimate" label="Time Estimate (minutes)">
+            <InputNumber min={0} style={{ width: "100%" }} placeholder="e.g. 120 for 2h" addonAfter="min" />
           </Form.Item>
           <Form.Item name="status" label="Initial Status" initialValue="ASSIGNED">
             <Select options={ALL_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))} />
