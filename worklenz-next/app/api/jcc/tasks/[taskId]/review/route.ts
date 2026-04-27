@@ -57,9 +57,9 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     }
   });
 
-  await publishRealtimeEvent({
+  void publishRealtimeEvent({
     channel: `project:${updated.projectId}`,
-    event: "task.reviewed",
+    event: "task_submission_changed",
     payload: {
       taskId: updated.id,
       projectId: updated.projectId,

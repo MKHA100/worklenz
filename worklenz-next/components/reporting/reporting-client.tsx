@@ -1,9 +1,11 @@
 "use client";
 
-import { Row, Col, Card, Statistic, Table, Tag, Typography, Flex, Progress } from "antd";
+import { useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { Row, Col, Card, Statistic, Table, Tag, Typography, Flex, Progress, Button } from "antd";
 import {
   CheckCircleOutlined, ClockCircleOutlined, ProjectOutlined,
-  TeamOutlined, RollbackOutlined, BarChartOutlined
+  TeamOutlined, RollbackOutlined, BarChartOutlined, SyncOutlined
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 
@@ -60,18 +62,28 @@ const activityCols: ColumnsType<Props["recentActivity"][0]> = [
 ];
 
 export function ReportingClient({ stats, tasksByStatus, recentActivity }: Props) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+
   const completionRate = stats.totalTasks > 0
     ? Math.round((stats.approvedTasks / stats.totalTasks) * 100)
     : 0;
 
+  function handleRefresh() {
+    startTransition(() => { router.refresh(); });
+  }
+
   return (
     <div>
-      <Flex align="center" gap={8} style={{ marginBottom: 24 }}>
-        <BarChartOutlined style={{ fontSize: 20, color: "#1677ff" }} />
-        <div>
-          <Title level={4} style={{ margin: 0 }}>Reporting Overview</Title>
-          <Text type="secondary">This month&apos;s activity summary</Text>
-        </div>
+      <Flex align="center" justify="space-between" style={{ marginBottom: 24 }}>
+        <Flex align="center" gap={8}>
+          <BarChartOutlined style={{ fontSize: 20, color: "#1677ff" }} />
+          <div>
+            <Title level={4} style={{ margin: 0 }}>Reporting Overview</Title>
+            <Text type="secondary">This month&apos;s activity summary</Text>
+          </div>
+        </Flex>
+        <Button icon={<SyncOutlined />} onClick={handleRefresh} loading={isPending}>Refresh</Button>
       </Flex>
 
       {/* KPI Stats */}

@@ -190,15 +190,44 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, []);
 
-  // Realtime: merge updated tasks from postgres_changes
+  async function fetchTask(taskId: string) {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`);
+      if (!res.ok) return;
+      const data = await res.json() as { task: Task };
+      setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, ...data.task } : t));
+      setSelectedTask((prev) => prev?.id === taskId ? { ...prev, ...data.task } : prev);
+    } catch { /* silent */ }
+  }
+
+  async function fetchMembers() {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/members`);
+      if (!res.ok) return;
+      const data = await res.json() as { members: Member[] };
+      setMembers(data.members);
+    } catch { /* silent */ }
+  }
+
+  // Realtime: full multi-user sync
   useProjectEvents(project.id, (event) => {
-    if (event.event === "UPDATE" || event.event === "INSERT") {
+    if (event.entity === "task") {
       const row = event.payload as Record<string, unknown> & { id?: string };
       if (!row.id) return;
       if (event.event === "UPDATE") {
         setTasks((prev) => prev.map((t) => t.id === row.id ? { ...t, ...(row as Partial<Task>) } : t));
         setSelectedTask((prev) => (prev?.id === row.id ? ({ ...prev, ...(row as Partial<Task>) } as Task) : prev));
+      } else if (event.event === "INSERT") {
+        setTasks((prev) => prev.find((t) => t.id === row.id) ? prev : [row as unknown as Task, ...prev]);
+      } else if (event.event === "DELETE") {
+        setTasks((prev) => prev.filter((t) => t.id !== row.id));
+        setSelectedTask((prev) => { if (prev?.id === row.id) { setDrawerOpen(false); return null; } return prev; });
       }
+    } else if (event.entity === "project_member") {
+      void fetchMembers();
+    } else if (event.entity === "task_submission" || event.entity === "task_attachment" || event.entity === "task_member") {
+      const taskId = String(event.payload["taskId"] ?? event.id);
+      if (taskId) void fetchTask(taskId);
     }
   });
 

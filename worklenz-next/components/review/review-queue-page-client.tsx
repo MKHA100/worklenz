@@ -8,7 +8,7 @@ import {
 } from "antd";
 import {
   CheckOutlined, RollbackOutlined, StopOutlined, PauseOutlined,
-  UserOutlined, ClockCircleOutlined, PaperClipOutlined
+  UserOutlined, ClockCircleOutlined, PaperClipOutlined, SyncOutlined
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 
@@ -62,6 +62,21 @@ export function ReviewQueuePageClient({ initialTasks }: Props) {
   const [selected, setSelected] = useState<Task | null>(null);
   const [comment, setComment] = useState("");
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      const res = await fetch("/api/jcc/review-queue");
+      if (!res.ok) throw new Error();
+      const data = await res.json() as { data: Task[] };
+      setTasks(data.data);
+    } catch {
+      message.error("Refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function submitReview(status: string) {
     if (!selected) return;
@@ -182,9 +197,12 @@ export function ReviewQueuePageClient({ initialTasks }: Props) {
           <Title level={4} style={{ margin: 0 }}>Review Queue</Title>
           <Text type="secondary">Tasks awaiting Senior QS review — oldest first</Text>
         </div>
-        <Badge count={tasks.length} color={tasks.length > 0 ? "#fa8c16" : "#52c41a"} overflowCount={99}>
-          <ClockCircleOutlined style={{ fontSize: 24 }} />
-        </Badge>
+        <Flex gap={12} align="center">
+          <Button icon={<SyncOutlined />} onClick={handleRefresh} loading={refreshing}>Refresh</Button>
+          <Badge count={tasks.length} color={tasks.length > 0 ? "#fa8c16" : "#52c41a"} overflowCount={99}>
+            <ClockCircleOutlined style={{ fontSize: 24 }} />
+          </Badge>
+        </Flex>
       </Flex>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>

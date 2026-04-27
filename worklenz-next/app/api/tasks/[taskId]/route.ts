@@ -11,6 +11,61 @@ const ALLOWED_STATUSES = [
   "SUBMITTED", "APPROVED", "REVISION_REQUIRED", "REJECTED", "ON_HOLD"
 ];
 
+export async function GET(_req: NextRequest, { params }: RouteContext) {
+  const profile = await requireUserProfile();
+  if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { taskId } = await params;
+
+  const task = await prisma.task.findUnique({
+    where: { id: taskId },
+    include: {
+      assignee: { select: { id: true, fullName: true, email: true, clerkId: true } },
+      taskMembers: { include: { user: { select: { id: true, fullName: true, email: true, clerkId: true } } } },
+      attachments: {
+        where: { submissionId: null },
+        select: { id: true, fileKey: true, fileName: true, mimeType: true, fileSize: true, createdAt: true }
+      },
+      submissions: {
+        orderBy: { roundNumber: "asc" },
+        include: {
+          submittedBy: { select: { id: true, fullName: true, email: true } },
+          reviewedBy: { select: { id: true, fullName: true, email: true } },
+          attachments: { select: { id: true, fileKey: true, fileName: true, mimeType: true, fileSize: true, createdAt: true } }
+        }
+      }
+    }
+  });
+
+  if (!task) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  return NextResponse.json({
+    task: {
+      ...task,
+      startDate: task.startDate?.toISOString() ?? null,
+      dueDate: task.dueDate?.toISOString() ?? null,
+      submittedAt: task.submittedAt?.toISOString() ?? null,
+      reviewedAt: task.reviewedAt?.toISOString() ?? null,
+      createdAt: task.createdAt.toISOString(),
+      updatedAt: task.updatedAt.toISOString(),
+      taskMemberIds: task.taskMembers.map((tm) => tm.userId),
+      taskMemberUsers: task.taskMembers.map((tm) => ({
+        id: tm.user.id, fullName: tm.user.fullName, email: tm.user.email, imageUrl: null
+      })),
+      attachments: task.attachments.map((a) => ({
+        ...a, createdAt: a.createdAt.toISOString()
+      })),
+      submissions: task.submissions.map((s) => ({
+        ...s,
+        submittedAt: s.submittedAt.toISOString(),
+        reviewedAt: s.reviewedAt?.toISOString() ?? null,
+        createdAt: s.createdAt.toISOString(),
+        attachments: s.attachments.map((a) => ({ ...a, createdAt: a.createdAt.toISOString() }))
+      }))
+    }
+  });
+}
+
 export async function PATCH(request: NextRequest, { params }: RouteContext) {
   const profile = await requireUserProfile();
   if (!profile) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
