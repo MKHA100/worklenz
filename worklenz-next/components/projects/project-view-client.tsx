@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   Tabs, Table, Tag, Button, Modal, Form, Input, Select, Space,
   Typography, Flex, Drawer, Descriptions, Divider, Progress,
@@ -13,7 +14,7 @@ import {
   CheckOutlined, RollbackOutlined, StopOutlined, PauseOutlined,
   PlayCircleOutlined, PauseCircleOutlined, UploadOutlined,
   PaperClipOutlined, DeleteOutlined, CalendarOutlined, FlagFilled,
-  SaveOutlined
+  SaveOutlined, SyncOutlined
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { UploadFile, UploadProps } from "antd/es/upload";
@@ -148,6 +149,8 @@ function UserAvatar({ user, size = 24 }: { user: { fullName?: string | null; ema
 
 export function ProjectViewClient({ userRole, project, initialTasks, members: initialMembers, seniors, allUsers }: Props) {
   const { message } = App.useApp();
+  const router = useRouter();
+  const [isRefreshing, startRefresh] = useTransition();
   const isReviewer = REVIEWER_ROLES.includes(userRole);
   const canManageMembers = MANAGER_ROLES.includes(userRole);
   const isManager = MANAGER_ROLES.includes(userRole);
@@ -195,9 +198,18 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
       const res = await fetch(`/api/tasks/${taskId}`);
       if (!res.ok) return;
       const data = await res.json() as { task: Task };
-      setTasks((prev) => prev.map((t) => t.id === taskId ? { ...t, ...data.task } : t));
+      setTasks((prev) => {
+        const exists = prev.some((t) => t.id === taskId);
+        return exists
+          ? prev.map((t) => t.id === taskId ? { ...t, ...data.task } : t)
+          : [data.task, ...prev];
+      });
       setSelectedTask((prev) => prev?.id === taskId ? { ...prev, ...data.task } : prev);
     } catch { /* silent */ }
+  }
+
+  function handleRefresh() {
+    startRefresh(() => { router.refresh(); });
   }
 
   async function fetchMembers() {
@@ -218,7 +230,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
         setTasks((prev) => prev.map((t) => t.id === row.id ? { ...t, ...(row as Partial<Task>) } : t));
         setSelectedTask((prev) => (prev?.id === row.id ? ({ ...prev, ...(row as Partial<Task>) } as Task) : prev));
       } else if (event.event === "INSERT") {
-        setTasks((prev) => prev.find((t) => t.id === row.id) ? prev : [row as unknown as Task, ...prev]);
+        void fetchTask(String(row.id));
       } else if (event.event === "DELETE") {
         setTasks((prev) => prev.filter((t) => t.id !== row.id));
         setSelectedTask((prev) => { if (prev?.id === row.id) { setDrawerOpen(false); return null; } return prev; });
@@ -647,9 +659,12 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
             <Text type="secondary" style={{ fontSize: 12 }}>{completion}% complete</Text>
           </Flex>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-          Add Task
-        </Button>
+        <Space>
+          <Button icon={<SyncOutlined />} onClick={handleRefresh} loading={isRefreshing} />
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+            Add Task
+          </Button>
+        </Space>
       </Flex>
 
       <Tabs defaultActiveKey="list" items={[
