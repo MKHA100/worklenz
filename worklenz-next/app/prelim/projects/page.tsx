@@ -10,14 +10,17 @@ export default async function ProjectsPage() {
 
   const isUnrestricted = UNRESTRICTED_ROLES.includes(profile.role);
 
-  const projects = await prisma.project.findMany({
-    where: isUnrestricted ? {} : { members: { some: { userId: profile.id } } },
-    orderBy: { updatedAt: "desc" },
-    include: {
-      office: { select: { id: true, name: true, code: true } },
-      _count: { select: { tasks: true } }
-    }
-  });
+  const [projects, offices] = await Promise.all([
+    prisma.project.findMany({
+      where: isUnrestricted ? {} : { members: { some: { userId: profile.id } } },
+      orderBy: { updatedAt: "desc" },
+      include: {
+        office: { select: { id: true, name: true, code: true } },
+        _count: { select: { tasks: true } }
+      }
+    }),
+    prisma.office.findMany({ orderBy: { name: "asc" } })
+  ]);
 
   return (
     <ProjectsClient
@@ -30,6 +33,13 @@ export default async function ProjectsPage() {
         taskCount: p._count.tasks,
         createdAt: p.createdAt.toISOString(),
         updatedAt: p.updatedAt.toISOString()
+      }))}
+      offices={offices.map((o) => ({
+        id: o.id,
+        code: o.code,
+        name: o.name,
+        city: o.city,
+        country: o.country
       }))}
     />
   );

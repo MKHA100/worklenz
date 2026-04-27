@@ -31,6 +31,7 @@ model UserProfile {
   submittedWork       TaskSubmission[]  @relation("SubmissionBy")
   reviewedSubmissions TaskSubmission[]  @relation("SubmissionReviewedBy")
   projectMemberships  ProjectMember[]
+  taskMemberships     TaskMember[]
 }
 
 model Project {
@@ -90,6 +91,19 @@ model Task {
   attachments   TaskAttachment[]
   submissions   TaskSubmission[]
   productivity  TaskProductivity?
+  taskMembers   TaskMember[]
+}
+
+model TaskMember {
+  id      String   @id @default(uuid()) @db.Uuid
+  taskId  String   @db.Uuid
+  userId  String   @db.Uuid
+  addedAt DateTime @default(now())
+
+  task Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user UserProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
 }
 
 model TaskAttachment {

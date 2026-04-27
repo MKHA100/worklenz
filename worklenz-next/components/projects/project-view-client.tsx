@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Tabs, Table, Tag, Button, Modal, Form, Input, Select, Space,
   Typography, Flex, Drawer, Descriptions, Divider, Progress,
-  Avatar, Tooltip, Badge, App, Card, Empty, Statistic, Upload, AutoComplete
+  Avatar, Tooltip, Badge, App, Card, Empty, Statistic, Upload
 } from "antd";
 import {
   PlusOutlined, UnorderedListOutlined, AppstoreOutlined,
@@ -48,6 +48,8 @@ type Submission = {
   attachments: Attachment[];
 };
 
+type TaskMemberUser = { id: string; fullName: string | null; email: string };
+
 type Task = {
   id: string; title: string; description: string | null; status: string;
   projectId: string; assigneeId: string | null; reviewerId: string | null;
@@ -57,6 +59,8 @@ type Task = {
   actualRate: number | null; efficiency: number | null; variance: number | null;
   unit: string | null; tradeCode: string | null;
   createdAt: string; updatedAt: string; assignee: Assignee;
+  taskMemberIds: string[];
+  taskMemberUsers: TaskMemberUser[];
   attachments: Attachment[];
   submissions: Submission[];
 };
@@ -294,19 +298,36 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     } catch (e) { message.error(e instanceof Error ? e.message : "Failed to remove member"); }
   }
 
-  async function handleCreate(values: { title: string; assigneeId?: string; status?: string; tradeCode?: string; unit?: string }) {
+  async function handleCreate(values: { title: string; assigneeIds?: string[]; status?: string; tradeCode?: string[]; unit?: string }) {
     setCreating(true);
     try {
+      const assigneeIds = values.assigneeIds ?? [];
+      // tradeCode comes as string[] from tags select — take first entry
+      const tradeCode = Array.isArray(values.tradeCode) ? (values.tradeCode[0] ?? null) : (values.tradeCode ?? null);
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...values, projectId: project.id, status: values.status ?? "ASSIGNED" })
+        body: JSON.stringify({
+          projectId: project.id,
+          title: values.title,
+          status: values.status ?? "ASSIGNED",
+          assigneeIds,
+          tradeCode,
+          unit: values.unit ?? null
+        })
       });
       if (!res.ok) throw new Error("Create failed");
       const { task } = await res.json() as { task: Task };
-      const assignee = members.find((m) => m.id === task.assigneeId) ?? null;
+      const primaryAssignee = members.find((m) => m.id === task.assigneeId) ?? null;
+      const taskMemberUsers = assigneeIds.map((uid) => {
+        const m = members.find((x) => x.id === uid);
+        return m ? { id: m.id, fullName: m.fullName, email: m.email } : null;
+      }).filter(Boolean) as TaskMemberUser[];
       setTasks((prev) => [{
-        ...task, assignee: assignee ? { id: assignee.id, fullName: assignee.fullName, email: assignee.email } : null,
+        ...task,
+        assignee: primaryAssignee ? { id: primaryAssignee.id, fullName: primaryAssignee.fullName, email: primaryAssignee.email } : null,
+        taskMemberIds: assigneeIds,
+        taskMemberUsers,
         attachments: [], submissions: [], submittedAt: null, reviewedAt: null, reviewComment: null,
         reviewOutcome: null, submissionNote: null, reviewerId: null,
         revisionCount: 0, timeSpentMinute: 0, plannedRate: null, actualRate: null,
@@ -368,13 +389,25 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
       render: (status: string) => <Tag color={STATUS_COLORS[status] ?? "default"}>{STATUS_LABELS[status] ?? status}</Tag>
     },
     {
-      title: "Assignee", key: "assignee", width: 160,
-      render: (_, record) => record.assignee ? (
-        <Flex gap={6} align="center">
-          <Avatar size={24} icon={<UserOutlined />} style={{ background: "#1677ff", fontSize: 12 }} />
-          <Text style={{ fontSize: 13 }}>{record.assignee.fullName ?? record.assignee.email}</Text>
-        </Flex>
-      ) : <Text type="secondary" style={{ fontStyle: "italic" }}>Unassigned</Text>
+      title: "Assignees", key: "assignee", width: 200,
+      render: (_, record) => {
+        const users = record.taskMemberUsers.length > 0
+          ? record.taskMemberUsers
+          : record.assignee ? [record.assignee] : [];
+        if (users.length === 0) return <Text type="secondary" style={{ fontStyle: "italic" }}>Unassigned</Text>;
+        return (
+          <Flex gap={4} align="center" wrap="wrap">
+            {users.map((u) => (
+              <Tooltip key={u.id} title={u.fullName ?? u.email}>
+                <Avatar size={24} icon={<UserOutlined />} style={{ background: "#1677ff", fontSize: 11, cursor: "default" }} />
+              </Tooltip>
+            ))}
+            {users.length === 1 && (
+              <Text style={{ fontSize: 13 }}>{users[0].fullName ?? users[0].email}</Text>
+            )}
+          </Flex>
+        );
+      }
     },
     {
       title: "Time", dataIndex: "timeSpentMinute", key: "time", width: 100,
@@ -812,17 +845,25 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
           <Form.Item name="title" label="Task Title" rules={[{ required: true }]}>
             <Input placeholder="Describe the task..." />
           </Form.Item>
-          <Form.Item name="assigneeId" label="Assign To">
-            <Select placeholder="Select member" allowClear
-              options={members.map((m) => ({ value: m.id, label: m.fullName ?? m.email }))} />
+          <Form.Item name="assigneeIds" label="Assign To (multiple allowed)">
+            <Select
+              mode="multiple"
+              placeholder="Select one or more members"
+              allowClear
+              showSearch
+              filterOption={(input, opt) =>
+                (opt?.label?.toString() ?? "").toLowerCase().includes(input.toLowerCase())
+              }
+              options={members.map((m) => ({ value: m.id, label: m.fullName ?? m.email }))}
+            />
           </Form.Item>
           <Form.Item name="tradeCode" label="Trade Code">
-            <AutoComplete
-              placeholder="Select or type custom trade code"
+            <Select
+              mode="tags"
+              maxCount={1}
+              placeholder="Select or type your own trade code"
               allowClear
-              filterOption={(input, opt) =>
-                (opt?.value?.toString() ?? "").toLowerCase().includes(input.toLowerCase())
-              }
+              tokenSeparators={[","]}
               options={[
                 { value: "QS", label: "QS — Quantity Surveying" },
                 { value: "STRUCT", label: "STRUCT — Structural" },

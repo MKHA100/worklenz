@@ -23,6 +23,7 @@ export default async function ProjectPage({ params }: Props) {
       where: { projectId },
       include: {
         assignee: { select: { id: true, fullName: true, email: true } },
+        taskMembers: { include: { user: { select: { id: true, fullName: true, email: true } } } },
         attachments: {
           where: { submissionId: null },
           select: { id: true, fileKey: true, fileName: true, mimeType: true, fileSize: true, createdAt: true }
@@ -98,6 +99,12 @@ export default async function ProjectPage({ params }: Props) {
         createdAt: t.createdAt.toISOString(),
         updatedAt: t.updatedAt.toISOString(),
         assignee: t.assignee,
+        taskMemberIds: t.taskMembers.map((tm) => tm.userId),
+        taskMemberUsers: t.taskMembers.map((tm) => ({
+          id: tm.user.id,
+          fullName: tm.user.fullName,
+          email: tm.user.email
+        })),
         attachments: t.attachments.map((a) => ({
           id: a.id, fileKey: a.fileKey, fileName: a.fileName,
           mimeType: a.mimeType, fileSize: a.fileSize, createdAt: a.createdAt.toISOString()

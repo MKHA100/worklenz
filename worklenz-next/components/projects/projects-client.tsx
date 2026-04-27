@@ -4,11 +4,11 @@ import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
   Table, Button, Input, Modal, Form, Select, Tag, Typography,
-  Flex, Tooltip, Space, Popconfirm, App
+  Flex, Tooltip, Space, Popconfirm, App, Divider
 } from "antd";
 import {
   PlusOutlined, SearchOutlined, SyncOutlined,
-  FolderOutlined, DeleteOutlined, EyeOutlined
+  FolderOutlined, DeleteOutlined, EyeOutlined, GlobalOutlined
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 
@@ -25,17 +25,38 @@ type Project = {
   updatedAt: string;
 };
 
-type Props = { initialProjects: Project[] };
+type Office = {
+  id: string;
+  code: string;
+  name: string;
+  city: string | null;
+  country: string | null;
+};
 
-export function ProjectsClient({ initialProjects }: Props) {
+type Props = {
+  initialProjects: Project[];
+  offices: Office[];
+};
+
+const COUNTRY_OPTIONS = [
+  "Sri Lanka", "Australia", "Saudi Arabia", "United Kingdom", "United States",
+  "United Arab Emirates", "Qatar", "Singapore", "India", "Canada", "Germany",
+  "France", "Japan", "New Zealand", "Malaysia", "Bahrain", "Kuwait", "Oman"
+];
+
+export function ProjectsClient({ initialProjects, offices: initialOffices }: Props) {
   const { message } = App.useApp();
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>(initialProjects);
+  const [offices, setOffices] = useState<Office[]>(initialOffices);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [showCreateOffice, setShowCreateOffice] = useState(false);
+  const [creatingOffice, setCreatingOffice] = useState(false);
   const [form] = Form.useForm();
+  const [officeForm] = Form.useForm();
 
   const filtered = useMemo(
     () =>
@@ -53,20 +74,21 @@ export function ProjectsClient({ initialProjects }: Props) {
       const res = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values)
+        body: JSON.stringify({ name: values.name, code: values.code, office_id: values.officeId })
       });
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json() as { error?: string };
         throw new Error(err.error ?? "Failed to create project");
       }
-      const { project } = await res.json();
+      const { project } = await res.json() as { project: { id: string; name: string; code: string; createdAt: string; updatedAt: string } };
+      const office = offices.find((o) => o.id === values.officeId);
       setProjects((prev) => [
         {
           id: project.id,
           name: project.name,
           code: project.code,
-          officeName: null,
-          officeCode: null,
+          officeName: office?.name ?? null,
+          officeCode: office?.code ?? null,
           taskCount: 0,
           createdAt: project.createdAt,
           updatedAt: project.updatedAt
@@ -75,11 +97,51 @@ export function ProjectsClient({ initialProjects }: Props) {
       ]);
       message.success("Project created");
       form.resetFields();
+      officeForm.resetFields();
+      setShowCreateOffice(false);
       setModalOpen(false);
     } catch (e: unknown) {
       message.error(e instanceof Error ? e.message : "Error creating project");
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function handleCreateOffice() {
+    let values: { officeName: string; country: string; city?: string };
+    try {
+      values = await officeForm.validateFields() as typeof values;
+    } catch {
+      return;
+    }
+
+    setCreatingOffice(true);
+    try {
+      const code = values.country.slice(0, 3).toUpperCase().replace(/\s/g, "") + Date.now().toString().slice(-3);
+      const res = await fetch("/api/offices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code,
+          name: values.officeName,
+          city: values.city ?? null,
+          country: values.country
+        })
+      });
+      if (!res.ok) {
+        const err = await res.json() as { error?: string };
+        throw new Error(err.error ?? "Failed to create office");
+      }
+      const { data } = await res.json() as { data: Office };
+      setOffices((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+      form.setFieldValue("officeId", data.id);
+      officeForm.resetFields();
+      setShowCreateOffice(false);
+      message.success(`Office "${data.name}" created`);
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : "Failed to create office");
+    } finally {
+      setCreatingOffice(false);
     }
   }
 
@@ -99,12 +161,19 @@ export function ProjectsClient({ initialProjects }: Props) {
     try {
       const res = await fetch("/api/projects");
       if (res.ok) {
-        const { projects: fresh } = await res.json();
+        const { projects: fresh } = await res.json() as { projects: Project[] };
         setProjects(fresh);
       }
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleModalClose() {
+    setModalOpen(false);
+    setShowCreateOffice(false);
+    form.resetFields();
+    officeForm.resetFields();
   }
 
   const columns: ColumnsType<Project> = [
@@ -138,10 +207,13 @@ export function ProjectsClient({ initialProjects }: Props) {
     {
       title: "Office",
       key: "office",
-      width: 160,
+      width: 180,
       render: (_, record) =>
         record.officeName ? (
-          <Text type="secondary">{record.officeName}</Text>
+          <Flex gap={4} align="center">
+            <GlobalOutlined style={{ color: "#8c8c8c", fontSize: 12 }} />
+            <Text type="secondary">{record.officeName}</Text>
+          </Flex>
         ) : (
           <Text type="secondary" style={{ fontStyle: "italic" }}>—</Text>
         )
@@ -201,7 +273,6 @@ export function ProjectsClient({ initialProjects }: Props) {
 
   return (
     <div>
-      {/* Header */}
       <Flex justify="space-between" align="center" style={{ marginBottom: 24 }}>
         <div>
           <Title level={4} style={{ margin: 0 }}>Projects</Title>
@@ -211,17 +282,12 @@ export function ProjectsClient({ initialProjects }: Props) {
           <Tooltip title="Refresh">
             <Button icon={<SyncOutlined spin={loading} />} onClick={handleRefresh} />
           </Tooltip>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setModalOpen(true)}
-          >
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
             New Project
           </Button>
         </Space>
       </Flex>
 
-      {/* Search */}
       <Flex style={{ marginBottom: 16 }}>
         <Input
           placeholder="Search projects..."
@@ -233,7 +299,6 @@ export function ProjectsClient({ initialProjects }: Props) {
         />
       </Flex>
 
-      {/* Table */}
       <Table
         dataSource={filtered}
         columns={columns}
@@ -251,9 +316,10 @@ export function ProjectsClient({ initialProjects }: Props) {
       <Modal
         title="Create New Project"
         open={modalOpen}
-        onCancel={() => { setModalOpen(false); form.resetFields(); }}
+        onCancel={handleModalClose}
         footer={null}
         destroyOnHidden
+        width={520}
       >
         <Form form={form} layout="vertical" onFinish={handleCreate} style={{ marginTop: 16 }}>
           <Form.Item
@@ -263,6 +329,7 @@ export function ProjectsClient({ initialProjects }: Props) {
           >
             <Input placeholder="e.g. Tower Block A — Level 3" />
           </Form.Item>
+
           <Form.Item
             name="code"
             label="Project Code"
@@ -273,9 +340,80 @@ export function ProjectsClient({ initialProjects }: Props) {
           >
             <Input placeholder="e.g. TBA-L3" style={{ textTransform: "uppercase" }} />
           </Form.Item>
+
+          <Form.Item name="officeId" label="Office Location">
+            <Select
+              placeholder="Select office location"
+              allowClear
+              showSearch
+              filterOption={(input, opt) =>
+                (opt?.label?.toString() ?? "").toLowerCase().includes(input.toLowerCase())
+              }
+              options={offices.map((o) => ({
+                value: o.id,
+                label: `${o.name}${o.country ? ` (${o.country})` : ""}`
+              }))}
+              dropdownRender={(menu) => (
+                <>
+                  {menu}
+                  <Divider style={{ margin: "4px 0" }} />
+                  <Button
+                    type="link"
+                    icon={<PlusOutlined />}
+                    style={{ width: "100%", textAlign: "left" }}
+                    onClick={() => setShowCreateOffice((v) => !v)}
+                  >
+                    {showCreateOffice ? "Cancel new office" : "Create new office location"}
+                  </Button>
+                </>
+              )}
+            />
+          </Form.Item>
+
+          {/* Inline create-office sub-form */}
+          {showCreateOffice && (
+            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: 16, marginBottom: 16 }}>
+              <Text strong style={{ fontSize: 13 }}>New Office Location</Text>
+              <Form form={officeForm} layout="vertical" style={{ marginTop: 12 }}>
+                <Form.Item
+                  name="officeName"
+                  label="Office Name"
+                  rules={[{ required: true, message: "Name required" }]}
+                >
+                  <Input placeholder="e.g. Colombo Office" />
+                </Form.Item>
+                <Form.Item
+                  name="country"
+                  label="Country"
+                  rules={[{ required: true, message: "Country required" }]}
+                >
+                  <Select
+                    showSearch
+                    placeholder="Select or type a country"
+                    mode="tags"
+                    maxCount={1}
+                    tokenSeparators={[","]}
+                    options={COUNTRY_OPTIONS.map((c) => ({ value: c, label: c }))}
+                  />
+                </Form.Item>
+                <Form.Item name="city" label="City (optional)">
+                  <Input placeholder="e.g. Colombo" />
+                </Form.Item>
+                <Button
+                  type="primary"
+                  size="small"
+                  loading={creatingOffice}
+                  onClick={handleCreateOffice}
+                >
+                  Add Office
+                </Button>
+              </Form>
+            </div>
+          )}
+
           <Flex justify="flex-end" gap={8}>
-            <Button onClick={() => { setModalOpen(false); form.resetFields(); }}>Cancel</Button>
-            <Button type="primary" htmlType="submit" loading={creating}>Create</Button>
+            <Button onClick={handleModalClose}>Cancel</Button>
+            <Button type="primary" htmlType="submit" loading={creating}>Create Project</Button>
           </Flex>
         </Form>
       </Modal>
