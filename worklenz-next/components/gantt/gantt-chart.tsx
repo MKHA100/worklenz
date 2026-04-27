@@ -4,6 +4,14 @@ import { useState } from "react";
 import { Flex, Typography, Tag, Tooltip, Empty } from "antd";
 import { CalendarOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
+
+const TZ = "Asia/Colombo";
+function fmtDate(d: string | Date) {
+  return new Date(d).toLocaleDateString("en-GB", { timeZone: TZ, day: "2-digit", month: "short", year: "numeric" });
+}
+function fmtDateTime(d: string | Date) {
+  return new Date(d).toLocaleString("en-GB", { timeZone: TZ, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+}
 import { PriorityFlag } from "@/components/tasks/priority-flag";
 
 const { Text } = Typography;
@@ -244,8 +252,8 @@ export function GanttChart({ tasks, groupByProject }: Props) {
                         <div>
                           <div><strong>{t.title}</strong></div>
                           <div>Status: {STATUS_LABELS[t.status] ?? t.status}</div>
-                          {t.startDate && <div>Start: {dayjs(t.startDate).format("DD MMM YYYY")}</div>}
-                          {t.dueDate && <div>Due: {dayjs(t.dueDate).format("DD MMM YYYY")}</div>}
+                          {t.startDate && <div>Start: {fmtDate(t.startDate)}</div>}
+                          {t.dueDate && <div>Due: {fmtDate(t.dueDate)}</div>}
                           {t.assigneeName && <div>Assignee: {t.assigneeName}</div>}
                         </div>
                       }

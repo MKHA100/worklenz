@@ -9,10 +9,11 @@ import {
 } from "antd";
 import {
   PlusOutlined, UnorderedListOutlined, AppstoreOutlined,
-  TeamOutlined, UserOutlined, ClockCircleOutlined,
+  TeamOutlined, ClockCircleOutlined,
   CheckOutlined, RollbackOutlined, StopOutlined, PauseOutlined,
   PlayCircleOutlined, PauseCircleOutlined, UploadOutlined,
-  PaperClipOutlined, DeleteOutlined, CalendarOutlined, FlagFilled
+  PaperClipOutlined, DeleteOutlined, CalendarOutlined, FlagFilled,
+  SaveOutlined
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import type { UploadFile, UploadProps } from "antd/es/upload";
@@ -22,6 +23,24 @@ import { PriorityFlag, PRIORITIES } from "@/components/tasks/priority-flag";
 import { useProjectEvents } from "@/lib/realtime/use-project-events";
 
 const { Title, Text, Paragraph } = Typography;
+
+// Sri Lanka timezone
+const TZ = "Asia/Colombo";
+
+function formatDateSL(d: string | Date | null | undefined): string {
+  if (!d) return "—";
+  return new Date(d).toLocaleDateString("en-GB", {
+    timeZone: TZ, day: "2-digit", month: "short", year: "numeric"
+  });
+}
+
+function formatDateTimeSL(d: string | Date | null | undefined): string {
+  if (!d) return "—";
+  return new Date(d).toLocaleString("en-GB", {
+    timeZone: TZ, day: "2-digit", month: "short",
+    hour: "2-digit", minute: "2-digit", hour12: false
+  });
+}
 
 const STATUS_COLORS: Record<string, string> = {
   ASSIGNED: "blue", IN_PROGRESS: "processing", SUBMITTED: "purple",
@@ -50,9 +69,10 @@ const ALL_STATUSES = ["ASSIGNED", "IN_PROGRESS", "QUERY_RAISED", "EXTENSION_REQU
 const KANBAN_COLS = ["ASSIGNED", "IN_PROGRESS", "SUBMITTED", "REVISION_REQUIRED", "ON_HOLD", "APPROVED", "REJECTED"];
 const REVIEWER_ROLES = ["owner", "admin", "managing_director", "senior_qs"];
 const QS_SUBMITTABLE = ["ASSIGNED", "IN_PROGRESS", "REVISION_REQUIRED"];
+const MANAGER_ROLES = ["owner", "admin", "managing_director", "senior_qs"];
 
 type Attachment = { id: string; fileKey: string; fileName: string; mimeType: string | null; fileSize: number | null; createdAt: string };
-type Assignee = { id: string; fullName: string | null; email: string } | null;
+type Assignee = { id: string; fullName: string | null; email: string; imageUrl?: string | null } | null;
 
 type Submission = {
   id: string; roundNumber: number; submittedAt: string; submissionNote: string | null;
@@ -63,7 +83,7 @@ type Submission = {
 };
 
 type TimeLog = { id: string; startedAt: string; endedAt: string | null; minutes: number; createdAt: string };
-type TaskMemberUser = { id: string; fullName: string | null; email: string };
+type TaskMemberUser = { id: string; fullName: string | null; email: string; imageUrl?: string | null };
 
 type Task = {
   id: string; title: string; description: string | null; status: string;
@@ -83,7 +103,7 @@ type Task = {
   timeLogs?: TimeLog[];
 };
 
-type Member = { id: string; fullName: string | null; email: string; role: string };
+type Member = { id: string; fullName: string | null; email: string; role: string; imageUrl?: string | null };
 
 type Props = {
   currentUserId: string;
@@ -95,8 +115,6 @@ type Props = {
   allUsers: Member[];
 };
 
-const MANAGER_ROLES = ["owner", "admin", "managing_director", "senior_qs"];
-
 function formatMinutes(min: number) {
   const h = Math.floor(min / 60), m = min % 60;
   return `${h}h ${m}m`;
@@ -107,15 +125,32 @@ function isPast(dateStr: string | null) {
   return new Date(dateStr) < new Date();
 }
 
-function formatDate(dateStr: string | null) {
-  if (!dateStr) return null;
-  return dayjs(dateStr).format("DD MMM YYYY");
+function UserAvatar({ user, size = 24 }: { user: { fullName?: string | null; email?: string; imageUrl?: string | null }; size?: number }) {
+  if (user.imageUrl) {
+    return (
+      <Avatar
+        size={size}
+        src={user.imageUrl}
+        alt={user.fullName ?? user.email ?? ""}
+        style={{ cursor: "default", flexShrink: 0 }}
+      />
+    );
+  }
+  const initials = user.fullName
+    ? user.fullName.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)
+    : (user.email ?? "?")[0].toUpperCase();
+  return (
+    <Avatar size={size} style={{ background: "#1677ff", fontSize: size < 28 ? 10 : 14, cursor: "default", flexShrink: 0 }}>
+      {initials}
+    </Avatar>
+  );
 }
 
-export function ProjectViewClient({ currentUserId, userRole, project, initialTasks, members: initialMembers, seniors, allUsers }: Props) {
+export function ProjectViewClient({ userRole, project, initialTasks, members: initialMembers, seniors, allUsers }: Props) {
   const { message } = App.useApp();
   const isReviewer = REVIEWER_ROLES.includes(userRole);
   const canManageMembers = MANAGER_ROLES.includes(userRole);
+  const isManager = MANAGER_ROLES.includes(userRole);
 
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [members, setMembers] = useState<Member[]>(initialMembers);
@@ -123,6 +158,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
   const [addingMember, setAddingMember] = useState(false);
   const [editTradeCode, setEditTradeCode] = useState("");
   const [editUnit, setEditUnit] = useState("");
+  const [editDescription, setEditDescription] = useState("");
   const [editDueDate, setEditDueDate] = useState<dayjs.Dayjs | null>(null);
   const [editStartDate, setEditStartDate] = useState<dayjs.Dayjs | null>(null);
   const [editTimeEstimate, setEditTimeEstimate] = useState<number | null>(null);
@@ -135,6 +171,8 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
   const [selectedReviewerId, setSelectedReviewerId] = useState<string | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const [timeLogs, setTimeLogs] = useState<TimeLog[]>([]);
+  const [noteFileList, setNoteFileList] = useState<UploadFile[]>([]);
+  const [savingNote, setSavingNote] = useState(false);
   const [form] = Form.useForm();
 
   const [fileList, setFileList] = useState<UploadFile[]>([]);
@@ -191,8 +229,6 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     try {
       const newMinutes = task.timeSpentMinute + elapsed;
       await patchTask(task.id, { timeSpentMinute: newMinutes });
-
-      // Create TaskTimeLog record
       if (startedAt) {
         const logRes = await fetch(`/api/tasks/${task.id}/time-logs`, {
           method: "POST",
@@ -204,7 +240,6 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
           setTimeLogs((prev) => [log, ...prev]);
         }
       }
-
       message.success(`Logged ${elapsed} minute${elapsed !== 1 ? "s" : ""}`);
       setTimerSessionSec(0);
     } catch { message.error("Failed to log time"); }
@@ -234,14 +269,15 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     setSelectedReviewerId(task.reviewerId ?? undefined);
     setEditTradeCode(task.tradeCode ?? "");
     setEditUnit(task.unit ?? "");
+    setEditDescription(task.description ?? "");
     setEditDueDate(task.dueDate ? dayjs(task.dueDate) : null);
     setEditStartDate(task.startDate ? dayjs(task.startDate) : null);
     setEditTimeEstimate(task.timeEstimate ?? null);
     setFileList([]);
+    setNoteFileList([]);
     setTimeLogs([]);
     setDrawerOpen(true);
 
-    // Fetch session history
     fetch(`/api/tasks/${task.id}/time-logs`)
       .then((r) => r.json())
       .then(({ logs }: { logs: TimeLog[] }) => setTimeLogs(logs))
@@ -277,6 +313,35 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     } catch { message.error("Action failed"); }
   }
 
+  async function handleSaveNote() {
+    if (!selectedTask) return;
+    setSavingNote(true);
+    try {
+      // Save description
+      if (editDescription !== (selectedTask.description ?? "")) {
+        await patchTask(selectedTask.id, { description: editDescription || null });
+      }
+      // Upload files
+      for (const uf of noteFileList.filter((f) => f.originFileObj)) {
+        const file = uf.originFileObj as File;
+        const uploaded = await uploadFileToR2(file, selectedTask.id);
+        const attRes = await fetch(`/api/tasks/${selectedTask.id}/attachments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(uploaded)
+        });
+        if (attRes.ok) {
+          const { attachment } = await attRes.json() as { attachment: Attachment };
+          setSelectedTask((prev) => prev ? { ...prev, attachments: [...prev.attachments, attachment] } : prev);
+          setTasks((prev) => prev.map((t) => t.id === selectedTask.id ? { ...t, attachments: [...t.attachments, attachment] } : t));
+        }
+      }
+      setNoteFileList([]);
+      message.success("Note saved");
+    } catch { message.error("Save failed"); }
+    finally { setSavingNote(false); }
+  }
+
   async function handleReviewAction(action: "approve" | "revision" | "reject" | "on_hold") {
     if (!selectedTask) return;
     const statusMap = { approve: "APPROVED", revision: "REVISION_REQUIRED", reject: "REJECTED", on_hold: "ON_HOLD" };
@@ -310,9 +375,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
         const file = uf.originFileObj as File;
         const uploaded = await uploadFileToR2(file, selectedTask.id);
         const attRes = await fetch(`/api/tasks/${selectedTask.id}/attachments`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(uploaded)
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(uploaded)
         });
         if (!attRes.ok) throw new Error("Failed to save attachment record");
         const { attachment } = await attRes.json() as { attachment: Attachment };
@@ -346,9 +409,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
     setAddingMember(true);
     try {
       const res = await fetch(`/api/projects/${project.id}/members`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: addMemberId })
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: addMemberId })
       });
       if (!res.ok) throw new Error((await res.json() as { error: string }).error);
       const { member } = await res.json() as { member: Member };
@@ -367,16 +428,9 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
   }
 
   async function handleCreate(values: {
-    title: string;
-    assigneeIds?: string[];
-    status?: string;
-    tradeCode?: string[];
-    unit?: string;
-    priority?: string;
-    startDate?: dayjs.Dayjs | null;
-    dueDate?: dayjs.Dayjs | null;
-    timeEstimate?: number | null;
-    requiresReview?: boolean;
+    title: string; assigneeIds?: string[]; status?: string; tradeCode?: string[];
+    unit?: string; priority?: string; startDate?: dayjs.Dayjs | null; dueDate?: dayjs.Dayjs | null;
+    timeEstimate?: number | null; requiresReview?: boolean;
   }) {
     setCreating(true);
     try {
@@ -386,12 +440,8 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          projectId: project.id,
-          title: values.title,
-          status: values.status ?? "ASSIGNED",
-          assigneeIds,
-          tradeCode,
-          unit: values.unit ?? null,
+          projectId: project.id, title: values.title, status: values.status ?? "ASSIGNED",
+          assigneeIds, tradeCode, unit: values.unit ?? null,
           priority: values.priority ?? "NORMAL",
           startDate: values.startDate ? values.startDate.toISOString() : null,
           dueDate: values.dueDate ? values.dueDate.toISOString() : null,
@@ -403,20 +453,17 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
       const { task } = await res.json() as { task: Task };
       const taskMemberUsers = assigneeIds.map((uid) => {
         const m = members.find((x) => x.id === uid);
-        return m ? { id: m.id, fullName: m.fullName, email: m.email } : null;
+        return m ? { id: m.id, fullName: m.fullName, email: m.email, imageUrl: m.imageUrl ?? null } : null;
       }).filter(Boolean) as TaskMemberUser[];
       const primaryAssignee = members.find((m) => m.id === task.assigneeId) ?? null;
       setTasks((prev) => [{
         ...task,
-        assignee: primaryAssignee ? { id: primaryAssignee.id, fullName: primaryAssignee.fullName, email: primaryAssignee.email } : null,
-        taskMemberIds: assigneeIds,
-        taskMemberUsers,
-        attachments: [], submissions: [], submittedAt: null, reviewedAt: null, reviewComment: null,
-        reviewOutcome: null, submissionNote: null, reviewerId: null,
-        revisionCount: 0, timeSpentMinute: 0, plannedRate: null, actualRate: null,
+        assignee: primaryAssignee ? { id: primaryAssignee.id, fullName: primaryAssignee.fullName, email: primaryAssignee.email, imageUrl: primaryAssignee.imageUrl ?? null } : null,
+        taskMemberIds: assigneeIds, taskMemberUsers, attachments: [], submissions: [],
+        submittedAt: null, reviewedAt: null, reviewComment: null, reviewOutcome: null, submissionNote: null,
+        reviewerId: null, revisionCount: 0, timeSpentMinute: 0, plannedRate: null, actualRate: null,
         efficiency: null, variance: null, unit: task.unit ?? null, tradeCode: task.tradeCode ?? null,
-        priority: task.priority ?? "NORMAL",
-        startDate: task.startDate ?? null, dueDate: task.dueDate ?? null,
+        priority: task.priority ?? "NORMAL", startDate: task.startDate ?? null, dueDate: task.dueDate ?? null,
         timeEstimate: task.timeEstimate ?? null, requiresReview: task.requiresReview ?? true
       }, ...prev]);
       message.success("Task created");
@@ -436,14 +483,16 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
   }
 
   const uploadProps: UploadProps = {
-    fileList,
-    beforeUpload: () => false,
-    onChange: ({ fileList: fl }) => setFileList(fl),
-    multiple: true,
-    maxCount: 10,
-    showUploadList: false
+    fileList, beforeUpload: () => false, onChange: ({ fileList: fl }) => setFileList(fl),
+    multiple: true, maxCount: 10, showUploadList: false
   };
 
+  const noteUploadProps: UploadProps = {
+    fileList: noteFileList, beforeUpload: () => false, onChange: ({ fileList: fl }) => setNoteFileList(fl),
+    multiple: true, maxCount: 10, showUploadList: false
+  };
+
+  // ── Task list columns ──────────────────────────────────────────────────────
   const taskColumns: ColumnsType<Task> = [
     {
       title: "Title", dataIndex: "title", key: "title",
@@ -459,12 +508,10 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
             </Tooltip>
           )}
           {timerRunning && timerTaskId === record.id && (
-            <Tooltip title="Timer running">
-              <ClockCircleOutlined style={{ color: "#1677ff", fontSize: 12 }} />
-            </Tooltip>
+            <Tooltip title="Timer running"><ClockCircleOutlined style={{ color: "#1677ff", fontSize: 12 }} /></Tooltip>
           )}
           {!record.requiresReview && (
-            <Tooltip title="Action Item (no review required)">
+            <Tooltip title="Action Item — no review required">
               <Tag color="purple" style={{ fontSize: 10, lineHeight: "16px", padding: "0 4px" }}>NOTE</Tag>
             </Tooltip>
           )}
@@ -491,13 +538,13 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
         return (
           <Text style={{ fontSize: 12, color: overdue ? "#ff4d4f" : "#595959" }}>
             <CalendarOutlined style={{ marginRight: 4 }} />
-            {formatDate(r.dueDate)}
+            {formatDateSL(r.dueDate)}
           </Text>
         );
       }
     },
     {
-      title: "Assignees", key: "assignee", width: 200,
+      title: "Assignees", key: "assignee", width: 180,
       render: (_, record) => {
         const users = record.taskMemberUsers.length > 0 ? record.taskMemberUsers : record.assignee ? [record.assignee] : [];
         if (users.length === 0) return <Text type="secondary" style={{ fontStyle: "italic" }}>Unassigned</Text>;
@@ -505,7 +552,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
           <Flex gap={4} align="center" wrap="wrap">
             {users.map((u) => (
               <Tooltip key={u.id} title={u.fullName ?? u.email}>
-                <Avatar size={24} icon={<UserOutlined />} style={{ background: "#1677ff", fontSize: 11, cursor: "default" }} />
+                <UserAvatar user={u} size={26} />
               </Tooltip>
             ))}
             {users.length === 1 && <Text style={{ fontSize: 13 }}>{users[0].fullName ?? users[0].email}</Text>}
@@ -514,7 +561,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
       }
     },
     {
-      title: "Time", key: "time", width: 120,
+      title: "Time", key: "time", width: 140,
       render: (_, r) => {
         const actual = r.timeSpentMinute;
         const estimate = r.timeEstimate;
@@ -613,16 +660,20 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                               <PriorityFlag priority={t.priority ?? "NORMAL"} />
                               {t.dueDate && (
                                 <Text style={{ fontSize: 11, color: isPast(t.dueDate) && !["APPROVED","REJECTED"].includes(t.status) ? "#ff4d4f" : "#8c8c8c" }}>
-                                  <CalendarOutlined /> {formatDate(t.dueDate)}
+                                  <CalendarOutlined /> {formatDateSL(t.dueDate)}
                                 </Text>
                               )}
                             </Flex>
-                            {t.assignee && (
-                              <Flex gap={4} align="center" style={{ marginTop: 4 }}>
-                                <Avatar size={16} icon={<UserOutlined />} style={{ fontSize: 10, background: "#1677ff" }} />
-                                <Text type="secondary" style={{ fontSize: 11 }}>{t.assignee.fullName ?? t.assignee.email}</Text>
-                              </Flex>
-                            )}
+                            {(() => {
+                              const users = t.taskMemberUsers.length > 0 ? t.taskMemberUsers : t.assignee ? [t.assignee] : [];
+                              return users.length > 0 ? (
+                                <Flex gap={4} align="center" style={{ marginTop: 4 }}>
+                                  <UserAvatar user={users[0]} size={18} />
+                                  <Text type="secondary" style={{ fontSize: 11 }}>{users[0].fullName ?? users[0].email}</Text>
+                                  {users.length > 1 && <Text type="secondary" style={{ fontSize: 10 }}>+{users.length - 1}</Text>}
+                                </Flex>
+                              ) : null;
+                            })()}
                             <Flex gap={4} wrap style={{ marginTop: 4 }}>
                               {t.revisionCount > 0 && <Tag color="orange" style={{ fontSize: 10 }}>{t.revisionCount} rev</Tag>}
                               {t.attachments.length > 0 && <Tag icon={<PaperClipOutlined />} style={{ fontSize: 10 }}>{t.attachments.length}</Tag>}
@@ -646,19 +697,12 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
               {canManageMembers && (
                 <Flex gap={8} style={{ marginBottom: 16 }}>
                   <Select
-                    style={{ flex: 1 }}
-                    placeholder="Add a member..."
-                    showSearch
-                    allowClear
-                    value={addMemberId}
-                    onChange={setAddMemberId}
-                    options={allUsers
-                      .filter((u) => !members.some((m) => m.id === u.id))
+                    style={{ flex: 1 }} placeholder="Add a member..." showSearch allowClear
+                    value={addMemberId} onChange={setAddMemberId}
+                    options={allUsers.filter((u) => !members.some((m) => m.id === u.id))
                       .map((u) => ({ value: u.id, label: `${u.fullName ?? u.email} (${u.role.replace(/_/g, " ")})` }))}
                   />
-                  <Button type="primary" icon={<PlusOutlined />} loading={addingMember} disabled={!addMemberId} onClick={handleAddMember}>
-                    Add
-                  </Button>
+                  <Button type="primary" icon={<PlusOutlined />} loading={addingMember} disabled={!addMemberId} onClick={handleAddMember}>Add</Button>
                 </Flex>
               )}
               <Table
@@ -668,7 +712,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                     title: "Member", key: "name",
                     render: (_, m) => (
                       <Flex gap={10} align="center">
-                        <Avatar icon={<UserOutlined />} style={{ background: "#1677ff" }} />
+                        <UserAvatar user={m} size={36} />
                         <div>
                           <Text strong style={{ fontSize: 14 }}>{m.fullName ?? "—"}</Text>
                           <br />
@@ -677,10 +721,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                       </Flex>
                     )
                   },
-                  {
-                    title: "Role", dataIndex: "role", key: "role", width: 160,
-                    render: (role: string) => <Tag style={{ textTransform: "capitalize" }}>{role.replace(/_/g, " ")}</Tag>
-                  },
+                  { title: "Role", dataIndex: "role", key: "role", width: 160, render: (role: string) => <Tag style={{ textTransform: "capitalize" }}>{role.replace(/_/g, " ")}</Tag> },
                   {
                     title: "Tasks", key: "tasks", width: 100,
                     render: (_, m) => {
@@ -690,12 +731,10 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                   },
                   ...(canManageMembers ? [{
                     title: "", key: "remove", width: 60,
-                    render: (_: unknown, m: Member) => (
-                      m.role === "managing_director" ? null : (
-                        <Tooltip title="Remove from project">
-                          <Button size="small" danger type="text" icon={<DeleteOutlined />} onClick={() => handleRemoveMember(m.id)} />
-                        </Tooltip>
-                      )
+                    render: (_: unknown, m: Member) => m.role === "managing_director" ? null : (
+                      <Tooltip title="Remove from project">
+                        <Button size="small" danger type="text" icon={<DeleteOutlined />} onClick={() => handleRemoveMember(m.id)} />
+                      </Tooltip>
                     )
                   }] : [])
                 ]}
@@ -705,27 +744,21 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
         }
       ]} />
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Task Drawer                                                          */}
-      {/* ------------------------------------------------------------------ */}
+      {/* ================================================================== */}
+      {/* Task Drawer — half-width, no status tag/flag in title               */}
+      {/* ================================================================== */}
       <Drawer
-        title={
-          <Flex gap={8} align="center">
-            <Text strong>{selectedTask?.title}</Text>
-            {selectedTask && <Tag color={STATUS_COLORS[selectedTask.status] ?? "default"}>{STATUS_LABELS[selectedTask.status] ?? selectedTask.status}</Tag>}
-            {selectedTask && <PriorityFlag priority={selectedTask.priority ?? "NORMAL"} />}
-          </Flex>
-        }
+        title={<Text strong style={{ fontSize: 15 }}>{selectedTask?.title}</Text>}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        size="default"
-        styles={{ wrapper: { width: 540 } }}
+        size="large"
+        styles={{ wrapper: { width: "50vw", minWidth: 520 } }}
         extra={
           selectedTask && (
             <Select
               value={selectedTask.status}
               onChange={(v) => handleStatusChange(selectedTask.id, v)}
-              style={{ width: 170 }}
+              style={{ width: 190 }}
               options={ALL_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))}
             />
           )
@@ -733,7 +766,8 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
       >
         {selectedTask && (
           <div>
-            {selectedTask.description && (
+            {/* Description */}
+            {selectedTask.description && !selectedTask.requiresReview === false && (
               <>
                 <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Description</Text>
                 <Paragraph style={{ marginTop: 4 }}>{selectedTask.description}</Paragraph>
@@ -744,31 +778,52 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
             {/* Meta */}
             <Descriptions column={1} size="small" style={{ marginBottom: 12 }}>
               <Descriptions.Item label="Assignee">
-                {selectedTask.taskMemberUsers.length > 0
-                  ? selectedTask.taskMemberUsers.map((u) => u.fullName ?? u.email).join(", ")
-                  : selectedTask.assignee ? (selectedTask.assignee.fullName ?? selectedTask.assignee.email) : "Unassigned"}
+                <Flex gap={6} align="center">
+                  {(selectedTask.taskMemberUsers.length > 0 ? selectedTask.taskMemberUsers : selectedTask.assignee ? [selectedTask.assignee] : [])
+                    .map((u) => (
+                      <Tooltip key={u.id} title={u.fullName ?? u.email}>
+                        <UserAvatar user={u} size={22} />
+                      </Tooltip>
+                    ))}
+                  <Text>
+                    {selectedTask.taskMemberUsers.length > 0
+                      ? selectedTask.taskMemberUsers.map((u) => u.fullName ?? u.email).join(", ")
+                      : selectedTask.assignee ? (selectedTask.assignee.fullName ?? selectedTask.assignee.email) : "Unassigned"}
+                  </Text>
+                </Flex>
               </Descriptions.Item>
               <Descriptions.Item label="Priority">
                 <Flex gap={6} align="center">
                   <PriorityFlag priority={selectedTask.priority ?? "NORMAL"} />
                   <Select
-                    size="small"
-                    value={selectedTask.priority ?? "NORMAL"}
-                    style={{ width: 110 }}
+                    size="small" value={selectedTask.priority ?? "NORMAL"} style={{ width: 110 }}
                     options={PRIORITIES.map((p) => ({ value: p, label: p }))}
                     onChange={(v) => patchTask(selectedTask.id, { priority: v }).catch(() => {})}
                   />
                 </Flex>
               </Descriptions.Item>
+              {/* Manager-only: toggle requiresReview */}
+              {isManager && (
+                <Descriptions.Item label="Review Required">
+                  <Flex gap={8} align="center">
+                    <Switch
+                      size="small"
+                      checked={selectedTask.requiresReview}
+                      checkedChildren="Yes"
+                      unCheckedChildren="No"
+                      onChange={(v) => patchTask(selectedTask.id, { requiresReview: v }).catch(() => {})}
+                    />
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {selectedTask.requiresReview ? "Requires submission & review" : "Action item — no review"}
+                    </Text>
+                  </Flex>
+                </Descriptions.Item>
+              )}
               <Descriptions.Item label="Trade Code">
                 <Input
                   variant="borderless" size="small" value={editTradeCode} placeholder="—"
                   onChange={(e) => setEditTradeCode(e.target.value)}
-                  onBlur={() => {
-                    if (editTradeCode !== (selectedTask.tradeCode ?? "")) {
-                      patchTask(selectedTask.id, { tradeCode: editTradeCode || null }).catch(() => {});
-                    }
-                  }}
+                  onBlur={() => { if (editTradeCode !== (selectedTask.tradeCode ?? "")) patchTask(selectedTask.id, { tradeCode: editTradeCode || null }).catch(() => {}); }}
                   style={{ padding: 0, width: "100%" }}
                 />
               </Descriptions.Item>
@@ -776,45 +831,31 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                 <Input
                   variant="borderless" size="small" value={editUnit} placeholder="—"
                   onChange={(e) => setEditUnit(e.target.value)}
-                  onBlur={() => {
-                    if (editUnit !== (selectedTask.unit ?? "")) {
-                      patchTask(selectedTask.id, { unit: editUnit || null }).catch(() => {});
-                    }
-                  }}
+                  onBlur={() => { if (editUnit !== (selectedTask.unit ?? "")) patchTask(selectedTask.id, { unit: editUnit || null }).catch(() => {}); }}
                   style={{ padding: 0, width: "100%" }}
                 />
               </Descriptions.Item>
               <Descriptions.Item label="Start Date">
                 <DatePicker
                   size="small" value={editStartDate} allowClear
-                  onChange={(d) => {
-                    setEditStartDate(d);
-                    patchTask(selectedTask.id, { startDate: d ? d.toISOString() : null }).catch(() => {});
-                  }}
+                  onChange={(d) => { setEditStartDate(d); patchTask(selectedTask.id, { startDate: d ? d.toISOString() : null }).catch(() => {}); }}
                   style={{ width: "100%" }}
                 />
               </Descriptions.Item>
               <Descriptions.Item label="Due Date">
                 <DatePicker
                   size="small" value={editDueDate} allowClear
-                  onChange={(d) => {
-                    setEditDueDate(d);
-                    patchTask(selectedTask.id, { dueDate: d ? d.toISOString() : null }).catch(() => {});
-                  }}
+                  onChange={(d) => { setEditDueDate(d); patchTask(selectedTask.id, { dueDate: d ? d.toISOString() : null }).catch(() => {}); }}
                   style={{ width: "100%" }}
                   status={editDueDate && editDueDate.isBefore(dayjs()) ? "error" : undefined}
                 />
               </Descriptions.Item>
               <Descriptions.Item label="Estimate">
                 <InputNumber
-                  size="small" min={0} value={editTimeEstimate}
-                  placeholder="Minutes"
-                  style={{ width: "100%" }}
+                  size="small" min={0} value={editTimeEstimate} placeholder="Minutes" style={{ width: "100%" }}
                   onChange={(v) => setEditTimeEstimate(v)}
-                  onBlur={() => {
-                    patchTask(selectedTask.id, { timeEstimate: editTimeEstimate }).catch(() => {});
-                  }}
-                  addonAfter="min"
+                  onBlur={() => { patchTask(selectedTask.id, { timeEstimate: editTimeEstimate }).catch(() => {}); }}
+                  suffix="min"
                 />
               </Descriptions.Item>
               <Descriptions.Item label="Time Logged">
@@ -850,22 +891,99 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
 
             {/* Session History */}
             {timeLogs.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Session History</Text>
+                <div style={{ marginTop: 8, maxHeight: 160, overflowY: "auto" }}>
+                  {timeLogs.map((log) => (
+                    <Flex key={log.id} justify="space-between" align="center"
+                      style={{ padding: "4px 8px", borderRadius: 4, background: "#f5f5f5", marginBottom: 4, fontSize: 12 }}>
+                      <Text style={{ fontSize: 12 }}>
+                        {formatDateTimeSL(log.startedAt)}
+                        {log.endedAt ? ` → ${new Date(log.endedAt).toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false })}` : ""}
+                      </Text>
+                      <Tag color="blue">{log.minutes} min</Tag>
+                    </Flex>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ================================================================
+                NOTE / ACTION ITEM PANEL
+                For tasks where requiresReview=false: still allow notes + files
+                ================================================================ */}
+            {!selectedTask.requiresReview && (
               <>
-                <div style={{ marginTop: 12 }}>
-                  <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Session History</Text>
-                  <div style={{ marginTop: 8, maxHeight: 160, overflowY: "auto" }}>
-                    {timeLogs.map((log) => (
-                      <Flex key={log.id} justify="space-between" align="center"
-                        style={{ padding: "4px 8px", borderRadius: 4, background: "#f5f5f5", marginBottom: 4, fontSize: 12 }}>
-                        <Text style={{ fontSize: 12 }}>
-                          {dayjs(log.startedAt).format("DD MMM HH:mm")}
-                          {log.endedAt ? ` → ${dayjs(log.endedAt).format("HH:mm")}` : ""}
-                        </Text>
-                        <Tag color="blue">{log.minutes} min</Tag>
+                <Divider />
+                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Notes & Documents</Text>
+                <div style={{ marginTop: 10 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Notes</Text>
+                  <Input.TextArea
+                    style={{ marginTop: 4 }}
+                    rows={4}
+                    placeholder="Type your notes here..."
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                  />
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>Attach Documents</Text>
+                  <Upload {...noteUploadProps} style={{ marginTop: 4 }}>
+                    <Button icon={<UploadOutlined />} style={{ marginTop: 4, width: "100%" }}>Select Files</Button>
+                  </Upload>
+                  {noteFileList.length > 0 && (
+                    <Flex vertical gap={4} style={{ marginTop: 8 }}>
+                      {noteFileList.map((f) => (
+                        <Flex key={f.uid} justify="space-between" align="center"
+                          style={{ background: "#f5f5f5", padding: "4px 8px", borderRadius: 4, fontSize: 12 }}>
+                          <Flex gap={6} align="center">
+                            <PaperClipOutlined />
+                            <Text style={{ fontSize: 12 }}>{f.name}</Text>
+                          </Flex>
+                          <Button type="text" size="small" danger icon={<DeleteOutlined />}
+                            onClick={() => setNoteFileList((prev) => prev.filter((x) => x.uid !== f.uid))} />
+                        </Flex>
+                      ))}
+                    </Flex>
+                  )}
+                </div>
+
+                {/* Existing attachments */}
+                {selectedTask.attachments.length > 0 && (
+                  <Flex vertical gap={4} style={{ marginTop: 8 }}>
+                    {selectedTask.attachments.map((a) => (
+                      <Flex key={a.id} justify="space-between" align="center"
+                        style={{ background: "#e6f4ff", padding: "4px 8px", borderRadius: 4 }}>
+                        <Flex gap={6} align="center">
+                          <PaperClipOutlined style={{ color: "#1677ff" }} />
+                          <Text style={{ fontSize: 12 }}>{a.fileName}</Text>
+                        </Flex>
+                        <Button type="text" size="small" danger icon={<DeleteOutlined />}
+                          onClick={() => handleDeleteAttachment(selectedTask.id, a.id)} />
                       </Flex>
                     ))}
-                  </div>
-                </div>
+                  </Flex>
+                )}
+
+                <Flex gap={8} style={{ marginTop: 16 }}>
+                  <Button
+                    icon={<SaveOutlined />}
+                    loading={savingNote}
+                    onClick={handleSaveNote}
+                    style={{ flex: 1 }}
+                  >
+                    Save Note
+                  </Button>
+                  {!["APPROVED", "REJECTED"].includes(selectedTask.status) && (
+                    <Button
+                      type="primary" icon={<CheckOutlined />}
+                      onClick={handleMarkComplete}
+                      style={{ flex: 1 }}
+                    >
+                      Mark as Complete
+                    </Button>
+                  )}
+                </Flex>
               </>
             )}
 
@@ -880,23 +998,9 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
               </>
             )}
 
-            {/* Non-review: Mark Complete */}
-            {!selectedTask.requiresReview && !["APPROVED", "REJECTED"].includes(selectedTask.status) && (
-              <>
-                <Divider />
-                <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Action Item</Text>
-                <div style={{ marginTop: 8 }}>
-                  <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
-                    This is an action item — no review required.
-                  </Text>
-                  <Button type="primary" block icon={<CheckOutlined />} onClick={handleMarkComplete}>
-                    Mark as Complete
-                  </Button>
-                </div>
-              </>
-            )}
-
-            {/* QS Submit Panel */}
+            {/* ================================================================
+                QS SUBMIT PANEL (only for review tasks)
+                ================================================================ */}
             {selectedTask.requiresReview && !isReviewer && QS_SUBMITTABLE.includes(selectedTask.status) && (
               <>
                 <Divider />
@@ -926,10 +1030,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
                       {fileList.map((f) => (
                         <Flex key={f.uid} justify="space-between" align="center"
                           style={{ background: "#f5f5f5", padding: "4px 8px", borderRadius: 4, fontSize: 12 }}>
-                          <Flex gap={6} align="center">
-                            <PaperClipOutlined />
-                            <Text style={{ fontSize: 12 }}>{f.name}</Text>
-                          </Flex>
+                          <Flex gap={6} align="center"><PaperClipOutlined /><Text style={{ fontSize: 12 }}>{f.name}</Text></Flex>
                           <Button type="text" size="small" danger icon={<DeleteOutlined />}
                             onClick={() => setFileList((prev) => prev.filter((x) => x.uid !== f.uid))} />
                         </Flex>
@@ -943,7 +1044,9 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
               </>
             )}
 
-            {/* Reviewer Panel */}
+            {/* ================================================================
+                REVIEWER PANEL
+                ================================================================ */}
             {isReviewer && selectedTask.status === "SUBMITTED" && (
               <>
                 <Divider />
@@ -966,7 +1069,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
 
             <Descriptions column={1} size="small" style={{ marginTop: 16 }}>
               {selectedTask.submittedAt && (
-                <Descriptions.Item label="Submitted">{new Date(selectedTask.submittedAt).toLocaleDateString()}</Descriptions.Item>
+                <Descriptions.Item label="Submitted">{formatDateSL(selectedTask.submittedAt)}</Descriptions.Item>
               )}
               {selectedTask.plannedRate != null && (
                 <Descriptions.Item label="Planned Rate">{selectedTask.plannedRate}</Descriptions.Item>
@@ -1006,7 +1109,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
           <Form.Item name="assigneeIds" label="Assign To (multiple allowed)">
             <Select
               mode="multiple" placeholder="Select one or more members" allowClear showSearch
-              filterOption={(input, opt) => (opt?.label?.toString() ?? "").toLowerCase().includes(input.toLowerCase())}
+              optionFilterProp="label"
               options={members.map((m) => ({ value: m.id, label: m.fullName ?? m.email }))}
             />
           </Form.Item>
@@ -1037,7 +1140,7 @@ export function ProjectViewClient({ currentUserId, userRole, project, initialTas
             </Form.Item>
           </Flex>
           <Form.Item name="timeEstimate" label="Time Estimate (minutes)">
-            <InputNumber min={0} style={{ width: "100%" }} placeholder="e.g. 120 for 2h" addonAfter="min" />
+            <InputNumber min={0} style={{ width: "100%" }} placeholder="e.g. 120 for 2h" suffix="min" />
           </Form.Item>
           <Form.Item name="status" label="Initial Status" initialValue="ASSIGNED">
             <Select options={ALL_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))} />
