@@ -2,6 +2,8 @@ import { requireUserProfile } from "@/lib/users/profile";
 import { prisma } from "@/lib/db/prisma";
 import { HomeClient } from "@/components/home/home-client";
 
+const UNRESTRICTED_ROLES = ["owner", "admin", "managing_director"];
+
 export default async function HomePage() {
   const profile = await requireUserProfile();
   if (!profile) return null;
@@ -9,6 +11,9 @@ export default async function HomePage() {
   const today = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z");
   const tomorrow = new Date(today);
   tomorrow.setDate(today.getDate() + 1);
+
+  const isUnrestricted = UNRESTRICTED_ROLES.includes(profile.role);
+  const membershipFilter = isUnrestricted ? {} : { members: { some: { userId: profile.id } } };
 
   const [myTasksCount, submittedCount, projectsCount, attendanceToday, myTasks, recentProjects] =
     await Promise.all([
@@ -19,7 +24,7 @@ export default async function HomePage() {
         }
       }),
       prisma.task.count({ where: { status: "SUBMITTED" } }),
-      prisma.project.count(),
+      prisma.project.count({ where: membershipFilter }),
       prisma.attendance.findFirst({
         where: { userId: profile.id, workDate: { gte: today, lt: tomorrow } }
       }),
@@ -35,6 +40,7 @@ export default async function HomePage() {
         }
       }),
       prisma.project.findMany({
+        where: membershipFilter,
         orderBy: { updatedAt: "desc" },
         take: 5,
         include: {
