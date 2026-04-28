@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isOneOfRoles } from "@/lib/auth/roles";
 import { prisma } from "@/lib/db/prisma";
-import { publishRealtimeEvent } from "@/lib/realtime/publish";
+import { publishRealtimeEvent, publishRealtimeEventToUsers } from "@/lib/realtime/publish";
 import { requireUserProfile } from "@/lib/users/profile";
+import { getProjectAffectedUserIds } from "@/lib/realtime/affected-users";
 
 const OUTCOME_TO_STATUS: Record<string, string> = {
   approved: "APPROVED",
@@ -57,16 +58,29 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
     }
   });
 
-  void publishRealtimeEvent({
-    channel: `project:${updated.projectId}`,
-    event: "task_submission_changed",
-    payload: {
+  void (async () => {
+    const affectedUserIds = await getProjectAffectedUserIds(updated.projectId, [
+      profile.id,
+      updated.assigneeId,
+      updated.reviewerId
+    ]);
+    const payload = {
       taskId: updated.id,
       projectId: updated.projectId,
-      outcome,
-      actorUserId: profile.id
-    }
-  });
+      affectedUserIds,
+      actorUserId: profile.id,
+      changeType: "submission_changed" as const,
+      outcome
+    };
+    await Promise.allSettled([
+      publishRealtimeEvent({
+        channel: `project:${updated.projectId}`,
+        event: "task.submission.changed",
+        payload
+      }),
+      publishRealtimeEventToUsers(affectedUserIds, "task.submission.changed", payload)
+    ]);
+  })();
 
   return NextResponse.json({ data: updated });
 }

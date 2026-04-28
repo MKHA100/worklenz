@@ -1,4 +1,6 @@
-
-# clerk configuration (can include secrets)
-/.clerk/
-.vercel
+.env
+.env.local
+.next
+node_modules
+.DS_Store
+*.log

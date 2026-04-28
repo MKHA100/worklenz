@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useTransition } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
   Tabs, Table, Tag, Button, Modal, Form, Input, Select, Space,
@@ -22,6 +24,9 @@ import dayjs from "dayjs";
 import { SubmissionTimeline } from "@/components/review/submission-timeline";
 import { PriorityFlag, PRIORITIES } from "@/components/tasks/priority-flag";
 import { useProjectEvents } from "@/lib/realtime/use-project-events";
+import { QK } from "@/lib/query-keys";
+import { fetchTask, fetchTaskTimeLogs, patchTask } from "@/lib/api/tasks";
+import { fetchProjectMembers, fetchProjectTasks } from "@/lib/api/projects";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -150,13 +155,51 @@ function UserAvatar({ user, size = 24 }: { user: { fullName?: string | null; ema
 export function ProjectViewClient({ userRole, project, initialTasks, members: initialMembers, seniors, allUsers }: Props) {
   const { message } = App.useApp();
   const router = useRouter();
-  const [isRefreshing, startRefresh] = useTransition();
+  const queryClient = useQueryClient();
   const isReviewer = REVIEWER_ROLES.includes(userRole);
   const canManageMembers = MANAGER_ROLES.includes(userRole);
   const isManager = MANAGER_ROLES.includes(userRole);
 
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
-  const [members, setMembers] = useState<Member[]>(initialMembers);
+  const { data: tasks = initialTasks } = useQuery({
+    queryKey: QK.projectTasks(project.id),
+    queryFn: () => fetchProjectTasks(project.id),
+    initialData: initialTasks,
+    staleTime: 30_000,
+  });
+
+  const { data: members = initialMembers } = useQuery({
+    queryKey: QK.projectMembers(project.id),
+    queryFn: () => fetchProjectMembers(project.id),
+    initialData: initialMembers,
+    staleTime: 60_000,
+  });
+
+  const { data: drawerTask } = useQuery({
+    queryKey: QK.task(selectedTaskId ?? ""),
+    queryFn: () => fetchTask(selectedTaskId!),
+    enabled: drawerOpen && !!selectedTaskId,
+    initialData: () => tasks.find((t) => t.id === selectedTaskId),
+    staleTime: 30_000,
+  });
+
+  const { data: timeLogs = [] } = useQuery({
+    queryKey: QK.taskTimeLogs(selectedTaskId ?? ""),
+    queryFn: () => fetchTaskTimeLogs(selectedTaskId!),
+    enabled: drawerOpen && !!selectedTaskId,
+  });
+
+  const updateTask = useMutation({
+    mutationFn: ({ taskId, body }: { taskId: string; body: Record<string, unknown> }) =>
+      patchTask(taskId, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QK.projectTasks(project.id) });
+      queryClient.invalidateQueries({ queryKey: QK.task(selectedTaskId ?? "") });
+    },
+    onError: () => message.error("Update failed"),
+  });
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [addMemberId, setAddMemberId] = useState<string | undefined>(undefined);
   const [addingMember, setAddingMember] = useState(false);
   const [editTradeCode, setEditTradeCode] = useState("");
@@ -165,19 +208,15 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
   const [editDueDate, setEditDueDate] = useState<dayjs.Dayjs | null>(null);
   const [editStartDate, setEditStartDate] = useState<dayjs.Dayjs | null>(null);
   const [editTimeEstimate, setEditTimeEstimate] = useState<number | null>(null);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [reviewComment, setReviewComment] = useState("");
   const [submissionNote, setSubmissionNote] = useState("");
   const [selectedReviewerId, setSelectedReviewerId] = useState<string | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
-  const [timeLogs, setTimeLogs] = useState<TimeLog[]>([]);
   const [noteFileList, setNoteFileList] = useState<UploadFile[]>([]);
   const [savingNote, setSavingNote] = useState(false);
   const [form] = Form.useForm();
-
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
 
@@ -187,59 +226,47 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
   const [timerSessionSec, setTimerSessionSec] = useState(0);
   const [timerStartedAt, setTimerStartedAt] = useState<Date | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasRealtimeSyncedRef = useRef(false);
   const timerSessionSecRef = useRef(0);
   useEffect(() => { timerSessionSecRef.current = timerSessionSec; }, [timerSessionSec]);
   useEffect(() => {
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
   }, []);
 
-  async function fetchTask(taskId: string) {
-    try {
-      const res = await fetch(`/api/tasks/${taskId}`);
-      if (!res.ok) return;
-      const data = await res.json() as { task: Task };
-      setTasks((prev) => {
-        const exists = prev.some((t) => t.id === taskId);
-        return exists
-          ? prev.map((t) => t.id === taskId ? { ...t, ...data.task } : t)
-          : [data.task, ...prev];
-      });
-      setSelectedTask((prev) => prev?.id === taskId ? { ...prev, ...data.task } : prev);
-    } catch { /* silent */ }
-  }
 
-  function handleRefresh() {
-    startRefresh(() => { router.refresh(); });
-  }
-
-  async function fetchMembers() {
-    try {
-      const res = await fetch(`/api/projects/${project.id}/members`);
-      if (!res.ok) return;
-      const data = await res.json() as { members: Member[] };
-      setMembers(data.members);
-    } catch { /* silent */ }
-  }
-
-  // Realtime: full multi-user sync
+  // Realtime: invalidate cache to trigger background refetch
   useProjectEvents(project.id, (event) => {
-    if (event.entity === "task") {
-      const row = event.payload as Record<string, unknown> & { id?: string };
-      if (!row.id) return;
-      if (event.event === "UPDATE") {
-        setTasks((prev) => prev.map((t) => t.id === row.id ? { ...t, ...(row as Partial<Task>) } : t));
-        setSelectedTask((prev) => (prev?.id === row.id ? ({ ...prev, ...(row as Partial<Task>) } as Task) : prev));
-      } else if (event.event === "INSERT") {
-        void fetchTask(String(row.id));
-      } else if (event.event === "DELETE") {
-        setTasks((prev) => prev.filter((t) => t.id !== row.id));
-        setSelectedTask((prev) => { if (prev?.id === row.id) { setDrawerOpen(false); return null; } return prev; });
+    if (event.source === "system") {
+      if (event.status === "SUBSCRIBED") {
+        if (hasRealtimeSyncedRef.current) queryClient.invalidateQueries({ queryKey: QK.projectTasks(project.id) });
+        else hasRealtimeSyncedRef.current = true;
+      } else if (event.status === "TIMED_OUT" || event.status === "CHANNEL_ERROR" || event.status === "CLOSED") {
+        queryClient.invalidateQueries({ queryKey: QK.projectTasks(project.id) });
       }
-    } else if (event.entity === "project_member") {
-      void fetchMembers();
-    } else if (event.entity === "task_submission" || event.entity === "task_attachment" || event.entity === "task_member") {
-      const taskId = String(event.payload["taskId"] ?? event.id);
-      if (taskId) void fetchTask(taskId);
+      return;
+    }
+
+    if (event.source === "postgres" && event.entity === "task") {
+      const row = event.row as Record<string, unknown> & { id?: string };
+      if (!row.id) return;
+      if (event.eventType === "UPDATE") {
+        queryClient.setQueryData(QK.projectTasks(project.id), (old: Task[] = []) =>
+          old.map((t) => t.id === row.id ? { ...t, ...(row as Partial<Task>) } : t)
+        );
+        if (selectedTaskId === row.id) {
+          queryClient.setQueryData(QK.task(row.id as string), (old: Task | undefined) =>
+            old ? { ...old, ...(row as Partial<Task>) } : old
+          );
+        }
+      } else if (event.eventType === "INSERT" || event.eventType === "DELETE") {
+        queryClient.invalidateQueries({ queryKey: QK.projectTasks(project.id) });
+      }
+    } else if (event.source === "postgres" && event.entity === "project_member") {
+      queryClient.invalidateQueries({ queryKey: QK.projectMembers(project.id) });
+    } else if (event.source !== "system") {
+      queryClient.invalidateQueries({ queryKey: QK.projectTasks(project.id) });
     }
   });
 
@@ -255,7 +282,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
     }, 1000);
   }
 
-  const stopTimer = useCallback(async (task: Task) => {
+  async function stopTimer(task: Task) {
     if (timerRef.current) clearInterval(timerRef.current);
     setTimerRunning(false);
     setTimerTaskId(null);
@@ -269,23 +296,18 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
 
     try {
       const newMinutes = task.timeSpentMinute + elapsed;
-      await patchTask(task.id, { timeSpentMinute: newMinutes });
+      await updateTask.mutateAsync({ taskId: task.id, body: { timeSpentMinute: newMinutes } });
       if (startedAt) {
-        const logRes = await fetch(`/api/tasks/${task.id}/time-logs`, {
+        await fetch(`/api/tasks/${task.id}/time-logs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString(), minutes: elapsed })
         });
-        if (logRes.ok) {
-          const { log } = await logRes.json() as { log: TimeLog };
-          setTimeLogs((prev) => [log, ...prev]);
-        }
       }
       message.success(`Logged ${elapsed} minute${elapsed !== 1 ? "s" : ""}`);
       setTimerSessionSec(0);
     } catch { message.error("Failed to log time"); }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timerStartedAt]);
+  }
 
   function formatTimer(task: Task | null) {
     const base = (task?.timeSpentMinute ?? 0) * 60;
@@ -304,6 +326,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
       setTimerSessionSec(0);
       message.warning("Timer stopped — switch task without saving");
     }
+    setSelectedTaskId(task.id);
     setSelectedTask(task);
     setReviewComment("");
     setSubmissionNote("");
@@ -316,31 +339,12 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
     setEditTimeEstimate(task.timeEstimate ?? null);
     setFileList([]);
     setNoteFileList([]);
-    setTimeLogs([]);
     setDrawerOpen(true);
-
-    fetch(`/api/tasks/${task.id}/time-logs`)
-      .then((r) => r.json())
-      .then(({ logs }: { logs: TimeLog[] }) => setTimeLogs(logs))
-      .catch(() => {});
-  }
-
-  async function patchTask(taskId: string, body: Record<string, unknown>) {
-    const res = await fetch(`/api/tasks/${taskId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    if (!res.ok) throw new Error("Update failed");
-    const { task } = await res.json();
-    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, ...task } : t)));
-    setSelectedTask((prev) => (prev?.id === taskId ? { ...prev, ...task } : prev));
-    return task;
   }
 
   async function handleStatusChange(taskId: string, status: string) {
     try {
-      await patchTask(taskId, { status });
+      await updateTask.mutateAsync({ taskId, body: { status } });
       message.success(`Status → ${STATUS_LABELS[status] ?? status}`);
     } catch { message.error("Update failed"); }
   }
@@ -348,7 +352,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
   async function handleMarkComplete() {
     if (!selectedTask) return;
     try {
-      await patchTask(selectedTask.id, { status: "APPROVED" });
+      await updateTask.mutateAsync({ taskId: selectedTask.id, body: { status: "APPROVED" } });
       message.success("Marked as complete");
       setDrawerOpen(false);
     } catch { message.error("Action failed"); }
@@ -360,7 +364,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
     try {
       // Save description
       if (editDescription !== (selectedTask.description ?? "")) {
-        await patchTask(selectedTask.id, { description: editDescription || null });
+        await updateTask.mutateAsync({ taskId: selectedTask.id, body: { description: editDescription || null } });
       }
       // Upload files
       for (const uf of noteFileList.filter((f) => f.originFileObj)) {
@@ -387,7 +391,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
     if (!selectedTask) return;
     const statusMap = { approve: "APPROVED", revision: "REVISION_REQUIRED", reject: "REJECTED", on_hold: "ON_HOLD" };
     try {
-      await patchTask(selectedTask.id, { status: statusMap[action], reviewComment });
+      await updateTask.mutateAsync({ taskId: selectedTask.id, body: { status: statusMap[action], reviewComment } });
       message.success("Review action applied");
       setReviewComment("");
       setDrawerOpen(false);
@@ -419,9 +423,6 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(uploaded)
         });
         if (!attRes.ok) throw new Error("Failed to save attachment record");
-        const { attachment } = await attRes.json() as { attachment: Attachment };
-        setSelectedTask((prev) => prev ? { ...prev, attachments: [...prev.attachments, attachment] } : prev);
-        setTasks((prev) => prev.map((t) => t.id === selectedTask.id ? { ...t, attachments: [...t.attachments, attachment] } : t));
       }
       const submitRes = await fetch(`/api/jcc/tasks/${selectedTask.id}/submit`, {
         method: "POST",
@@ -432,9 +433,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
         const err = await submitRes.json() as { error: string };
         throw new Error(err.error ?? "Submit failed");
       }
-      const { task } = await submitRes.json() as { task: Task };
-      setTasks((prev) => prev.map((t) => t.id === selectedTask.id ? { ...t, ...task } : t));
-      setSelectedTask((prev) => prev ? { ...prev, ...task } : prev);
+      queryClient.invalidateQueries({ queryKey: QK.projectTasks(project.id) });
       message.success("Submitted for review");
       setFileList([]);
     } catch (e: unknown) {
@@ -453,8 +452,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userId: addMemberId })
       });
       if (!res.ok) throw new Error((await res.json() as { error: string }).error);
-      const { member } = await res.json() as { member: Member };
-      setMembers((prev) => prev.some((m) => m.id === member.id) ? prev : [...prev, member]);
+      queryClient.invalidateQueries({ queryKey: QK.projectMembers(project.id) });
       setAddMemberId(undefined);
     } catch (e) { message.error(e instanceof Error ? e.message : "Failed to add member"); }
     finally { setAddingMember(false); }
@@ -464,7 +462,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
     try {
       const res = await fetch(`/api/projects/${project.id}/members?userId=${userId}`, { method: "DELETE" });
       if (!res.ok) throw new Error((await res.json() as { error: string }).error);
-      setMembers((prev) => prev.filter((m) => m.id !== userId));
+      queryClient.invalidateQueries({ queryKey: QK.projectMembers(project.id) });
     } catch (e) { message.error(e instanceof Error ? e.message : "Failed to remove member"); }
   }
 
@@ -491,22 +489,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
         })
       });
       if (!res.ok) throw new Error("Create failed");
-      const { task } = await res.json() as { task: Task };
-      const taskMemberUsers = assigneeIds.map((uid) => {
-        const m = members.find((x) => x.id === uid);
-        return m ? { id: m.id, fullName: m.fullName, email: m.email, imageUrl: m.imageUrl ?? null } : null;
-      }).filter(Boolean) as TaskMemberUser[];
-      const primaryAssignee = members.find((m) => m.id === task.assigneeId) ?? null;
-      setTasks((prev) => [{
-        ...task,
-        assignee: primaryAssignee ? { id: primaryAssignee.id, fullName: primaryAssignee.fullName, email: primaryAssignee.email, imageUrl: primaryAssignee.imageUrl ?? null } : null,
-        taskMemberIds: assigneeIds, taskMemberUsers, attachments: [], submissions: [],
-        submittedAt: null, reviewedAt: null, reviewComment: null, reviewOutcome: null, submissionNote: null,
-        reviewerId: null, revisionCount: 0, timeSpentMinute: 0, plannedRate: null, actualRate: null,
-        efficiency: null, variance: null, unit: task.unit ?? null, tradeCode: task.tradeCode ?? null,
-        priority: task.priority ?? "NORMAL", startDate: task.startDate ?? null, dueDate: task.dueDate ?? null,
-        timeEstimate: task.timeEstimate ?? null, requiresReview: task.requiresReview ?? true
-      }, ...prev]);
+      queryClient.invalidateQueries({ queryKey: QK.projectTasks(project.id) });
       message.success("Task created");
       form.resetFields();
       setCreateModalOpen(false);
@@ -534,7 +517,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
   };
 
   // ── Task list columns ──────────────────────────────────────────────────────
-  const taskColumns: ColumnsType<Task> = [
+  const taskColumns: ColumnsType<Task> = useMemo(() => [
     {
       title: "Title", dataIndex: "title", key: "title",
       render: (title, record) => (
@@ -635,10 +618,23 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
         />
       )
     }
-  ];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [timerRunning, timerTaskId]);
 
-  const approved = tasks.filter((t) => t.status === "APPROVED").length;
-  const completion = tasks.length > 0 ? Math.round((approved / tasks.length) * 100) : 0;
+  const { approved, completion } = useMemo(() => {
+    const approved = tasks.filter((t) => t.status === "APPROVED").length;
+    return { approved, completion: tasks.length > 0 ? Math.round((approved / tasks.length) * 100) : 0 };
+  }, [tasks]);
+
+  const kanbanGroups = useMemo(
+    () => Object.fromEntries(KANBAN_COLS.map((col) => [col, tasks.filter((t) => t.status === col)])),
+    [tasks]
+  );
+
+  const memberTaskCounts = useMemo(
+    () => Object.fromEntries(members.map((m) => [m.id, tasks.filter((t) => t.assigneeId === m.id).length])),
+    [members, tasks]
+  );
 
   const isTimerActiveForSelected = timerRunning && timerTaskId === selectedTask?.id;
   const timerDisabled = selectedTask ? ["APPROVED", "REJECTED", "SUBMITTED"].includes(selectedTask.status) : false;
@@ -685,7 +681,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
             <div style={{ overflowX: "auto" }}>
               <Flex gap={12} style={{ minWidth: 900, padding: "8px 0" }}>
                 {KANBAN_COLS.map((col) => {
-                  const colTasks = tasks.filter((t) => t.status === col);
+                  const colTasks = kanbanGroups[col] ?? [];
                   const colStyle = KANBAN_COL_STYLE[col] ?? { bg: "#f5f5f5", headerColor: "#595959" };
                   return (
                     <div key={col} style={{ flex: "0 0 220px", background: colStyle.bg, borderRadius: 8, padding: 12, borderTop: `3px solid ${colStyle.headerColor}` }}>
@@ -769,7 +765,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
                   {
                     title: "Tasks", key: "tasks", width: 100,
                     render: (_, m) => {
-                      const count = tasks.filter((t) => t.assigneeId === m.id).length;
+                      const count = memberTaskCounts[m.id] ?? 0;
                       return <Tag color={count > 0 ? "blue" : "default"}>{count} tasks</Tag>;
                     }
                   },

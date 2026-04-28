@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Table, Tag, Button, Input, Typography, Flex, Avatar,
   Space, Badge, App, Tooltip, Card, Statistic, Row, Col,
@@ -17,6 +19,9 @@ const { TextArea } = Input;
 
 import { SubmissionTimeline } from "./submission-timeline";
 import type { Submission } from "./submission-timeline";
+import { useUserEvents } from "@/lib/realtime/use-user-events";
+import { QK } from "@/lib/query-keys";
+import { fetchReviewQueue } from "@/lib/api/review-queue";
 
 
 type Task = {
@@ -36,7 +41,7 @@ type Task = {
   submissions: Submission[];
 };
 
-type Props = { initialTasks: Task[] };
+type Props = { userId: string; initialTasks: Task[] };
 
 function waitingLabel(submittedAt: string | null) {
   if (!submittedAt) return "—";
@@ -56,29 +61,57 @@ function urgencyColor(submittedAt: string | null) {
   return "#52c41a";
 }
 
-export function ReviewQueuePageClient({ initialTasks }: Props) {
+export function ReviewQueuePageClient({ userId, initialTasks }: Props) {
   const { message } = App.useApp();
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const queryClient = useQueryClient();
   const [selected, setSelected] = useState<Task | null>(null);
   const [comment, setComment] = useState("");
   const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const hasRealtimeSyncedRef = useRef(false);
 
-  async function handleRefresh() {
-    setRefreshing(true);
-    try {
-      const res = await fetch("/api/jcc/review-queue");
-      if (!res.ok) throw new Error();
-      const data = await res.json() as { data: Task[] };
-      setTasks(data.data);
-    } catch {
-      message.error("Refresh failed");
-    } finally {
-      setRefreshing(false);
+  const { data: tasks = initialTasks } = useQuery({
+    queryKey: QK.reviewQueue(),
+    queryFn: fetchReviewQueue,
+    initialData: initialTasks,
+    staleTime: 30_000,
+  });
+
+  const submitReview = useMutation({
+    mutationFn: ({ id, status, comment: cmnt }: { id: string; status: string; comment: string }) =>
+      fetch(`/api/tasks/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, reviewComment: cmnt.trim() || null }),
+      }).then((r) => {
+        if (!r.ok) throw new Error("Update failed");
+        return r.json();
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QK.reviewQueue() });
+      message.success("Review submitted");
+      setSelected(null);
+      setComment("");
+    },
+    onError: () => message.error("Action failed"),
+  });
+
+  useUserEvents(userId, (event) => {
+    if (event.source === "system") {
+      if (event.status === "SUBSCRIBED") {
+        if (hasRealtimeSyncedRef.current) queryClient.invalidateQueries({ queryKey: QK.reviewQueue() });
+        else hasRealtimeSyncedRef.current = true;
+      } else if (event.status === "TIMED_OUT" || event.status === "CHANNEL_ERROR" || event.status === "CLOSED") {
+        queryClient.invalidateQueries({ queryKey: QK.reviewQueue() });
+      }
+      return;
     }
-  }
 
-  async function submitReview(status: string) {
+    if (event.source !== "system") {
+      queryClient.invalidateQueries({ queryKey: QK.reviewQueue() });
+    }
+  });
+
+  async function handleSubmitReview(status: string) {
     if (!selected) return;
     if ((status === "REVISION_REQUIRED" || status === "REJECTED") && !comment.trim()) {
       message.warning("Comment required for revision / rejection");
@@ -86,18 +119,7 @@ export function ReviewQueuePageClient({ initialTasks }: Props) {
     }
     setLoading(true);
     try {
-      const res = await fetch(`/api/tasks/${selected.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, reviewComment: comment.trim() || null })
-      });
-      if (!res.ok) throw new Error("Update failed");
-      setTasks((prev) => prev.filter((t) => t.id !== selected.id));
-      message.success(`Task marked as ${status.replace(/_/g, " ").toLowerCase()}`);
-      setSelected(null);
-      setComment("");
-    } catch {
-      message.error("Action failed");
+      await submitReview.mutateAsync({ id: selected.id, status, comment });
     } finally {
       setLoading(false);
     }
@@ -197,12 +219,9 @@ export function ReviewQueuePageClient({ initialTasks }: Props) {
           <Title level={4} style={{ margin: 0 }}>Review Queue</Title>
           <Text type="secondary">Tasks awaiting Senior QS review — oldest first</Text>
         </div>
-        <Flex gap={12} align="center">
-          <Button icon={<SyncOutlined />} onClick={handleRefresh} loading={refreshing}>Refresh</Button>
-          <Badge count={tasks.length} color={tasks.length > 0 ? "#fa8c16" : "#52c41a"} overflowCount={99}>
-            <ClockCircleOutlined style={{ fontSize: 24 }} />
-          </Badge>
-        </Flex>
+        <Badge count={tasks.length} color={tasks.length > 0 ? "#fa8c16" : "#52c41a"} overflowCount={99}>
+          <ClockCircleOutlined style={{ fontSize: 24 }} />
+        </Badge>
       </Flex>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
@@ -262,7 +281,7 @@ export function ReviewQueuePageClient({ initialTasks }: Props) {
                 type="primary"
                 icon={<CheckOutlined />}
                 loading={loading}
-                onClick={() => submitReview("APPROVED")}
+                onClick={() => handleSubmitReview("APPROVED")}
                 style={{ background: "#52c41a", borderColor: "#52c41a" }}
               >
                 Approve
@@ -270,7 +289,7 @@ export function ReviewQueuePageClient({ initialTasks }: Props) {
               <Button
                 icon={<RollbackOutlined />}
                 loading={loading}
-                onClick={() => submitReview("REVISION_REQUIRED")}
+                onClick={() => handleSubmitReview("REVISION_REQUIRED")}
                 style={{ color: "#fa8c16", borderColor: "#fa8c16" }}
               >
                 Revision Required
@@ -278,7 +297,7 @@ export function ReviewQueuePageClient({ initialTasks }: Props) {
               <Button
                 icon={<PauseOutlined />}
                 loading={loading}
-                onClick={() => submitReview("ON_HOLD")}
+                onClick={() => handleSubmitReview("ON_HOLD")}
               >
                 On Hold
               </Button>
@@ -286,7 +305,7 @@ export function ReviewQueuePageClient({ initialTasks }: Props) {
                 danger
                 icon={<StopOutlined />}
                 loading={loading}
-                onClick={() => submitReview("REJECTED")}
+                onClick={() => handleSubmitReview("REJECTED")}
               >
                 Reject
               </Button>

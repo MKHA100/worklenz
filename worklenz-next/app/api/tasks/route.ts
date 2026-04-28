@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db/prisma";
 import { requireUserProfile } from "@/lib/users/profile";
 import { logInfo, logError } from "@/lib/logging/axiom";
 import { sendTaskAssignedEmail, sendActionItemAssignedEmail } from "@/lib/email/resend";
+import { publishRealtimeEvent, publishRealtimeEventToUsers } from "@/lib/realtime/publish";
+import { getProjectAffectedUserIds } from "@/lib/realtime/affected-users";
 
 export async function POST(request: NextRequest) {
   const profile = await requireUserProfile();
@@ -69,6 +71,50 @@ export async function POST(request: NextRequest) {
   });
 
   await logInfo("api.tasks.create", { taskId: task.id, projectId: body.projectId, actor: profile.id });
+
+  void (async () => {
+    const affectedUserIds = await getProjectAffectedUserIds(body.projectId, [profile.id, ...assigneeIds]);
+    const createdPayload = {
+      projectId: body.projectId,
+      taskId: task.id,
+      affectedUserIds,
+      actorUserId: profile.id,
+      changeType: "created" as const
+    };
+
+    await Promise.allSettled([
+      publishRealtimeEvent({
+        channel: `project:${body.projectId}`,
+        event: "task.created",
+        payload: createdPayload
+      }),
+      publishRealtimeEventToUsers(affectedUserIds, "task.created", createdPayload),
+      assigneeIds.length > 0
+        ? publishRealtimeEvent({
+            channel: `project:${body.projectId}`,
+            event: "task.members.changed",
+            payload: {
+              projectId: body.projectId,
+              taskId: task.id,
+              affectedUserIds,
+              actorUserId: profile.id,
+              changeType: "members_changed",
+              action: "added"
+            }
+          })
+        : Promise.resolve("skip"),
+      assigneeIds.length > 0
+        ? publishRealtimeEventToUsers(affectedUserIds, "task.members.changed", {
+            projectId: body.projectId,
+            taskId: task.id,
+            affectedUserIds,
+            actorUserId: profile.id,
+            changeType: "members_changed",
+            action: "added"
+          })
+        : Promise.resolve()
+    ]);
+  })();
 
   // Fire-and-forget assignment emails — fetch assignee profiles
   if (assigneeIds.length > 0) {

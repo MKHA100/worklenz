@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db/prisma";
 import { requireUserProfile } from "@/lib/users/profile";
 import { redis } from "@/lib/cache/redis";
 import { logInfo } from "@/lib/logging/axiom";
+import { publishRealtimeEvent, publishRealtimeEventToUsers } from "@/lib/realtime/publish";
+import { getProjectAffectedUserIds } from "@/lib/realtime/affected-users";
 
 type RouteContext = { params: Promise<{ taskId: string }> };
 
@@ -148,6 +150,83 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
   const r = redis();
   if (r) await r.del(`project:${task.projectId}:tasks`);
   await logInfo("api.tasks.update", { taskId, actor: profile.id, status: body.status });
+
+  void (async () => {
+    const assigneeChanged = body.assigneeId !== undefined && body.assigneeId !== task.assigneeId;
+    const statusChanged = body.status !== undefined && body.status !== task.status;
+    const changeType = assigneeChanged
+      ? "assignee_changed"
+      : statusChanged
+        ? "status_changed"
+        : "updated";
+
+    const affectedUserIds = await getProjectAffectedUserIds(task.projectId, [
+      profile.id,
+      task.assigneeId,
+      updated.assigneeId
+    ]);
+
+    const updatedPayload = {
+      projectId: task.projectId,
+      taskId,
+      affectedUserIds,
+      actorUserId: profile.id,
+      changeType,
+      status: updated.status,
+      previousStatus: task.status,
+      assigneeId: updated.assigneeId,
+      previousAssigneeId: task.assigneeId
+    } as const;
+
+    const publishOps: Array<Promise<unknown>> = [
+      publishRealtimeEvent({
+        channel: `project:${task.projectId}`,
+        event: "task.updated",
+        payload: updatedPayload
+      }),
+      publishRealtimeEventToUsers(affectedUserIds, "task.updated", updatedPayload)
+    ];
+
+    if (assigneeChanged) {
+      const membersPayload = {
+        projectId: task.projectId,
+        taskId,
+        affectedUserIds,
+        actorUserId: profile.id,
+        changeType: "members_changed" as const,
+        action: "reassigned" as const
+      };
+      publishOps.push(
+        publishRealtimeEvent({
+          channel: `project:${task.projectId}`,
+          event: "task.members.changed",
+          payload: membersPayload
+        }),
+        publishRealtimeEventToUsers(affectedUserIds, "task.members.changed", membersPayload)
+      );
+    }
+
+    if (statusChanged && ["SUBMITTED", "APPROVED", "REVISION_REQUIRED", "REJECTED", "ON_HOLD"].includes(updated.status)) {
+      const submissionPayload = {
+        projectId: task.projectId,
+        taskId,
+        affectedUserIds,
+        actorUserId: profile.id,
+        changeType: "submission_changed" as const,
+        outcome: updated.status
+      };
+      publishOps.push(
+        publishRealtimeEvent({
+          channel: `project:${task.projectId}`,
+          event: "task.submission.changed",
+          payload: submissionPayload
+        }),
+        publishRealtimeEventToUsers(affectedUserIds, "task.submission.changed", submissionPayload)
+      );
+    }
+
+    await Promise.allSettled(publishOps);
+  })();
 
   return NextResponse.json({ task: updated });
 }

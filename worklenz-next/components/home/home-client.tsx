@@ -1,14 +1,20 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Row, Col, Card, Table, Tag, Typography, Flex, Badge, Button, Empty
 } from "antd";
 import {
   ProjectOutlined, CheckCircleOutlined, ClockCircleOutlined, CalendarOutlined,
-  ArrowRightOutlined, ReloadOutlined
+  ArrowRightOutlined, SyncOutlined
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
+import { useUserEvents } from "@/lib/realtime/use-user-events";
+import { QK } from "@/lib/query-keys";
+import { fetchHomeStats } from "@/lib/api/home";
 
 const { Title, Text } = Typography;
 
@@ -62,6 +68,7 @@ type Stats = {
 };
 
 type Props = {
+  userId: string;
   greeting: string;
   dateStr: string;
   stats: Stats;
@@ -101,7 +108,35 @@ const taskColumns: ColumnsType<MyTask> = [
   }
 ];
 
-export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }: Props) {
+export function HomeClient({ userId, greeting, dateStr, stats, myTasks, recentProjects }: Props) {
+  const queryClient = useQueryClient();
+  const hasRealtimeSyncedRef = useRef(false);
+
+  const { data } = useQuery({
+    queryKey: QK.homeStats(userId),
+    queryFn: fetchHomeStats,
+    initialData: { stats, myTasks, recentProjects },
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  });
+
+  // Realtime: invalidate to trigger background refetch
+  useUserEvents(userId, (event) => {
+    if (event.source === "system") {
+      if (event.status === "SUBSCRIBED") {
+        if (hasRealtimeSyncedRef.current) queryClient.invalidateQueries({ queryKey: QK.homeStats(userId) });
+        else hasRealtimeSyncedRef.current = true;
+      } else if (event.status === "TIMED_OUT" || event.status === "CHANNEL_ERROR" || event.status === "CLOSED") {
+        queryClient.invalidateQueries({ queryKey: QK.homeStats(userId) });
+      }
+      return;
+    }
+
+    if (event.source !== "system") {
+      queryClient.invalidateQueries({ queryKey: QK.homeStats(userId) });
+    }
+  });
+
   const attendanceBadge = stats.attendanceStatus
     ? { status: "success" as const, text: stats.attendanceStatus.replace("_", " ") }
     : { status: "error" as const, text: "Not logged" };
@@ -113,7 +148,9 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
         <Title level={3} style={{ marginBottom: 0, fontWeight: 500 }}>
           {greeting}
         </Title>
-        <Text style={{ color: "#1677ff", fontSize: 14 }}>{dateStr}</Text>
+        <Flex gap={8} align="center">
+          <Text style={{ color: "#1677ff", fontSize: 14 }}>{dateStr}</Text>
+        </Flex>
       </Flex>
 
       {/* Stats */}
@@ -124,7 +161,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
               <ClockCircleOutlined style={{ fontSize: 24, color: "#1677ff" }} />
               <div>
                 <Title level={2} style={{ margin: 0, color: "#1677ff" }}>
-                  {stats.myTasksCount}
+                  {data?.stats?.myTasksCount ?? stats.myTasksCount}
                 </Title>
                 <Text type="secondary" style={{ fontSize: 12 }}>My Open Tasks</Text>
               </div>
@@ -137,7 +174,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
               <CheckCircleOutlined style={{ fontSize: 24, color: "#fa8c16" }} />
               <div>
                 <Title level={2} style={{ margin: 0, color: "#fa8c16" }}>
-                  {stats.submittedCount}
+                  {data?.stats?.submittedCount ?? stats.submittedCount}
                 </Title>
                 <Text type="secondary" style={{ fontSize: 12 }}>Pending Review</Text>
               </div>
@@ -150,7 +187,7 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
               <ProjectOutlined style={{ fontSize: 24, color: "#52c41a" }} />
               <div>
                 <Title level={2} style={{ margin: 0, color: "#52c41a" }}>
-                  {stats.projectsCount}
+                  {data?.stats?.projectsCount ?? stats.projectsCount}
                 </Title>
                 <Text type="secondary" style={{ fontSize: 12 }}>Projects</Text>
               </div>
@@ -191,11 +228,11 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
             variant="borderless"
             style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}
           >
-            {myTasks.length === 0 ? (
+            {(data?.myTasks ?? myTasks).length === 0 ? (
               <Empty description="No active tasks" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             ) : (
               <Table
-                dataSource={myTasks}
+                dataSource={data?.myTasks ?? myTasks}
                 columns={taskColumns}
                 rowKey="id"
                 pagination={{ pageSize: 8, size: "small" }}
@@ -221,11 +258,11 @@ export function HomeClient({ greeting, dateStr, stats, myTasks, recentProjects }
             variant="borderless"
             style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}
           >
-            {recentProjects.length === 0 ? (
+            {(data?.recentProjects ?? recentProjects).length === 0 ? (
               <Empty description="No projects yet" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             ) : (
               <Flex vertical gap={8}>
-                {recentProjects.map((p) => (
+                {(data?.recentProjects ?? recentProjects).map((p) => (
                   <Link key={p.id} href={`/prelim/projects/${p.id}`}>
                     <Card
                       size="small"

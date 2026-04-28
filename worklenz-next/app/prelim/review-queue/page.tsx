@@ -7,8 +7,10 @@ const SUBMISSION_INCLUDE = {
   orderBy: { roundNumber: "asc" as const },
   include: {
     submittedBy: { select: { id: true, fullName: true, email: true } },
-    reviewedBy:  { select: { id: true, fullName: true, email: true } },
-    attachments: true
+    reviewedBy: { select: { id: true, fullName: true, email: true } },
+    attachments: {
+      select: { id: true, fileKey: true, fileName: true, mimeType: true, fileSize: true, createdAt: true }
+    }
   }
 };
 
@@ -19,31 +21,26 @@ export default async function ReviewQueuePage() {
   await requireOneOfRoles(["owner", "admin", "managing_director", "senior_qs"]);
   if (!profile) return null;
 
-  // Managing directors and above see all projects; senior_qs only see their member projects
   const isUnrestricted = UNRESTRICTED_ROLES.includes(profile.role);
-  const memberProjectIds = isUnrestricted ? null : (
-    await prisma.projectMember.findMany({
-      where: { userId: profile.id },
-      select: { projectId: true }
-    })
-  ).map((pm) => pm.projectId);
 
   const tasks = await prisma.task.findMany({
     where: {
       status: "SUBMITTED",
-      ...(memberProjectIds ? { projectId: { in: memberProjectIds } } : {})
+      ...(isUnrestricted ? {} : { project: { members: { some: { userId: profile.id } } } })
     },
     include: {
-      project:     { select: { id: true, name: true, code: true } },
-      assignee:    { select: { id: true, fullName: true, email: true } },
-      reviewer:    { select: { id: true, fullName: true, email: true } },
+      project: { select: { id: true, name: true, code: true } },
+      assignee: { select: { id: true, fullName: true, email: true } },
+      reviewer: { select: { id: true, fullName: true, email: true } },
       submissions: SUBMISSION_INCLUDE
     },
-    orderBy: [{ submittedAt: "asc" }, { updatedAt: "asc" }]
+    orderBy: [{ submittedAt: "asc" }, { updatedAt: "asc" }],
+    take: 50
   });
 
   return (
     <ReviewQueuePageClient
+      userId={profile.id}
       initialTasks={tasks.map((t) => ({
         id: t.id,
         title: t.title,

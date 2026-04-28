@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
   Table, Button, Input, Modal, Form, Select, Tag, Typography,
@@ -11,6 +13,9 @@ import {
   FolderOutlined, DeleteOutlined, EyeOutlined, GlobalOutlined
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
+import { useUserEvents } from "@/lib/realtime/use-user-events";
+import { QK } from "@/lib/query-keys";
+import { fetchProjects } from "@/lib/api/projects";
 
 const { Title, Text } = Typography;
 
@@ -34,6 +39,7 @@ type Office = {
 };
 
 type Props = {
+  currentUserId: string;
   initialProjects: Project[];
   offices: Office[];
 };
@@ -44,19 +50,25 @@ const COUNTRY_OPTIONS = [
   "France", "Japan", "New Zealand", "Malaysia", "Bahrain", "Kuwait", "Oman"
 ];
 
-export function ProjectsClient({ initialProjects, offices: initialOffices }: Props) {
+export function ProjectsClient({ currentUserId, initialProjects, offices: initialOffices }: Props) {
   const { message } = App.useApp();
   const router = useRouter();
-  const [projects, setProjects] = useState<Project[]>(initialProjects);
-  const [offices, setOffices] = useState<Office[]>(initialOffices);
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [showCreateOffice, setShowCreateOffice] = useState(false);
   const [creatingOffice, setCreatingOffice] = useState(false);
   const [form] = Form.useForm();
   const [officeForm] = Form.useForm();
+  const [offices, setOffices] = useState<Office[]>(initialOffices);
+  const hasRealtimeSyncedRef = useRef(false);
+
+  const { data: projects = initialProjects } = useQuery({
+    queryKey: QK.projects(),
+    queryFn: fetchProjects,
+    initialData: initialProjects,
+    staleTime: 30_000,
+  });
 
   const filtered = useMemo(
     () =>
@@ -68,43 +80,29 @@ export function ProjectsClient({ initialProjects, offices: initialOffices }: Pro
     [projects, search]
   );
 
-  async function handleCreate(values: { name: string; code: string; officeId?: string }) {
-    setCreating(true);
-    try {
-      const res = await fetch("/api/projects", {
+  const createProject = useMutation({
+    mutationFn: (values: { name: string; code: string; officeId?: string }) =>
+      fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: values.name, code: values.code, office_id: values.officeId })
-      });
-      if (!res.ok) {
-        const err = await res.json() as { error?: string };
-        throw new Error(err.error ?? "Failed to create project");
-      }
-      const { project } = await res.json() as { project: { id: string; name: string; code: string; createdAt: string; updatedAt: string } };
-      const office = offices.find((o) => o.id === values.officeId);
-      setProjects((prev) => [
-        {
-          id: project.id,
-          name: project.name,
-          code: project.code,
-          officeName: office?.name ?? null,
-          officeCode: office?.code ?? null,
-          taskCount: 0,
-          createdAt: project.createdAt,
-          updatedAt: project.updatedAt
-        },
-        ...prev
-      ]);
+        body: JSON.stringify({ name: values.name, code: values.code, office_id: values.officeId }),
+      }).then((r) => {
+        if (!r.ok) throw new Error("Failed to create");
+        return r.json();
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QK.projects() });
       message.success("Project created");
       form.resetFields();
       officeForm.resetFields();
       setShowCreateOffice(false);
       setModalOpen(false);
-    } catch (e: unknown) {
-      message.error(e instanceof Error ? e.message : "Error creating project");
-    } finally {
-      setCreating(false);
-    }
+    },
+    onError: (e: Error) => message.error(e.message),
+  });
+
+  async function handleCreate(values: { name: string; code: string; officeId?: string }) {
+    await createProject.mutateAsync(values);
   }
 
   async function handleCreateOffice() {
@@ -145,29 +143,38 @@ export function ProjectsClient({ initialProjects, offices: initialOffices }: Pro
     }
   }
 
-  async function handleDelete(id: string) {
-    try {
-      const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Delete failed");
-      setProjects((prev) => prev.filter((p) => p.id !== id));
+  const deleteProject = useMutation({
+    mutationFn: (id: string) =>
+      fetch(`/api/projects/${id}`, { method: "DELETE" }).then((r) => {
+        if (!r.ok) throw new Error("Delete failed");
+        return r.json();
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QK.projects() });
       message.success("Project deleted");
-    } catch {
-      message.error("Failed to delete project");
-    }
+    },
+    onError: () => message.error("Failed to delete project"),
+  });
+
+  async function handleDelete(id: string) {
+    await deleteProject.mutateAsync(id);
   }
 
-  async function handleRefresh() {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/projects");
-      if (res.ok) {
-        const { projects: fresh } = await res.json() as { projects: Project[] };
-        setProjects(fresh);
+  useUserEvents(currentUserId, (event) => {
+    if (event.source === "system") {
+      if (event.status === "SUBSCRIBED") {
+        if (hasRealtimeSyncedRef.current) queryClient.invalidateQueries({ queryKey: QK.projects() });
+        else hasRealtimeSyncedRef.current = true;
+      } else if (event.status === "TIMED_OUT" || event.status === "CHANNEL_ERROR" || event.status === "CLOSED") {
+        queryClient.invalidateQueries({ queryKey: QK.projects() });
       }
-    } finally {
-      setLoading(false);
+      return;
     }
-  }
+
+    if (event.source !== "system") {
+      queryClient.invalidateQueries({ queryKey: QK.projects() });
+    }
+  });
 
   function handleModalClose() {
     setModalOpen(false);
@@ -279,9 +286,6 @@ export function ProjectsClient({ initialProjects, offices: initialOffices }: Pro
           <Text type="secondary">{projects.length} project{projects.length !== 1 ? "s" : ""}</Text>
         </div>
         <Space>
-          <Tooltip title="Refresh">
-            <Button icon={<SyncOutlined spin={loading} />} onClick={handleRefresh} />
-          </Tooltip>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
             New Project
           </Button>
@@ -303,7 +307,6 @@ export function ProjectsClient({ initialProjects, offices: initialOffices }: Pro
         dataSource={filtered}
         columns={columns}
         rowKey="id"
-        loading={loading}
         pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `${t} projects` }}
         onRow={(record) => ({
           onDoubleClick: () => router.push(`/prelim/projects/${record.id}`)
@@ -413,7 +416,7 @@ export function ProjectsClient({ initialProjects, offices: initialOffices }: Pro
 
           <Flex justify="flex-end" gap={8}>
             <Button onClick={handleModalClose}>Cancel</Button>
-            <Button type="primary" htmlType="submit" loading={creating}>Create Project</Button>
+            <Button type="primary" htmlType="submit" loading={createProject.isPending}>Create Project</Button>
           </Flex>
         </Form>
       </Modal>

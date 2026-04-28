@@ -24,6 +24,7 @@ export default async function ProjectsPage() {
 
   return (
     <ProjectsClient
+      currentUserId={profile.id}
       initialProjects={projects.map((p) => ({
         id: p.id,
         name: p.name,

@@ -2,23 +2,11 @@ import { notFound, redirect } from "next/navigation";
 import { prisma } from "@/lib/db/prisma";
 import { requireUserProfile } from "@/lib/users/profile";
 import { ProjectViewClient } from "@/components/projects/project-view-client";
-import { clerkClient } from "@clerk/nextjs/server";
 
 type Props = { params: Promise<{ projectId: string }> };
 
 const REVIEWER_ROLES = ["owner", "admin", "managing_director", "senior_qs"];
 const UNRESTRICTED_ROLES = ["owner", "admin", "managing_director"];
-
-async function fetchClerkImageMap(clerkIds: string[]): Promise<Record<string, string>> {
-  if (clerkIds.length === 0) return {};
-  try {
-    const client = await clerkClient();
-    const result = await client.users.getUserList({ userId: clerkIds, limit: 200 });
-    return Object.fromEntries(result.data.map((u) => [u.id, u.imageUrl]));
-  } catch {
-    return {};
-  }
-}
 
 export default async function ProjectPage({ params }: Props) {
   const profile = await requireUserProfile();
@@ -34,30 +22,19 @@ export default async function ProjectPage({ params }: Props) {
     prisma.task.findMany({
       where: { projectId },
       include: {
-        assignee: { select: { id: true, fullName: true, email: true, clerkId: true } },
-        taskMembers: { include: { user: { select: { id: true, fullName: true, email: true, clerkId: true } } } },
-        attachments: {
-          where: { submissionId: null },
-          select: { id: true, fileKey: true, fileName: true, mimeType: true, fileSize: true, createdAt: true }
-        },
-        submissions: {
-          orderBy: { roundNumber: "asc" },
-          include: {
-            submittedBy: { select: { id: true, fullName: true, email: true } },
-            reviewedBy:  { select: { id: true, fullName: true, email: true } },
-            attachments: { select: { id: true, fileKey: true, fileName: true, mimeType: true, fileSize: true, createdAt: true } }
-          }
-        }
+        assignee: { select: { id: true, fullName: true, email: true } },
+        taskMembers: { include: { user: { select: { id: true, fullName: true, email: true } } } }
       },
       orderBy: { createdAt: "desc" }
     }),
     prisma.projectMember.findMany({
       where: { projectId },
-      include: { user: { select: { id: true, fullName: true, email: true, role: true, clerkId: true } } },
+      include: { user: { select: { id: true, fullName: true, email: true, role: true } } },
       orderBy: { addedAt: "asc" }
     }),
     prisma.userProfile.findMany({
-      select: { id: true, fullName: true, email: true, role: true, clerkId: true },
+      where: { projectMemberships: { some: { projectId } } },
+      select: { id: true, fullName: true, email: true, role: true },
       orderBy: { fullName: "asc" }
     })
   ]);
@@ -72,25 +49,13 @@ export default async function ProjectPage({ params }: Props) {
     if (!membership) redirect("/prelim/unauthorized");
   }
 
-  // Collect all unique Clerk IDs for image fetch
-  const allClerkIds = [
-    ...projectMemberRecords.map((pm) => pm.user.clerkId),
-    ...allUsersRaw.map((u) => u.clerkId),
-    ...rawTasks.flatMap((t) => [
-      t.assignee?.clerkId,
-      ...t.taskMembers.map((tm) => tm.user.clerkId)
-    ]).filter((id): id is string => Boolean(id))
-  ].filter((id): id is string => Boolean(id));
-  const uniqueClerkIds = [...new Set(allClerkIds)];
-  const imageMap = await fetchClerkImageMap(uniqueClerkIds);
-
   const members = projectMemberRecords.map((pm) => ({
     ...pm.user,
-    imageUrl: pm.user.clerkId ? (imageMap[pm.user.clerkId] ?? null) : null
+    imageUrl: null
   }));
   const allUsers = allUsersRaw.map((u) => ({
     ...u,
-    imageUrl: u.clerkId ? (imageMap[u.clerkId] ?? null) : null
+    imageUrl: null
   }));
   const seniors = members.filter((m) => REVIEWER_ROLES.includes(m.role));
 
@@ -132,38 +97,23 @@ export default async function ProjectPage({ params }: Props) {
         requiresReview: t.requiresReview,
         createdAt: t.createdAt.toISOString(),
         updatedAt: t.updatedAt.toISOString(),
-        assignee: t.assignee ? {
-          id: t.assignee.id,
-          fullName: t.assignee.fullName,
-          email: t.assignee.email,
-          imageUrl: t.assignee.clerkId ? (imageMap[t.assignee.clerkId] ?? null) : null
-        } : null,
+        assignee: t.assignee
+          ? {
+              id: t.assignee.id,
+              fullName: t.assignee.fullName,
+              email: t.assignee.email,
+              imageUrl: null
+            }
+          : null,
         taskMemberIds: t.taskMembers.map((tm) => tm.userId),
         taskMemberUsers: t.taskMembers.map((tm) => ({
           id: tm.user.id,
           fullName: tm.user.fullName,
           email: tm.user.email,
-          imageUrl: tm.user.clerkId ? (imageMap[tm.user.clerkId] ?? null) : null
+          imageUrl: null
         })),
-        attachments: t.attachments.map((a) => ({
-          id: a.id, fileKey: a.fileKey, fileName: a.fileName,
-          mimeType: a.mimeType, fileSize: a.fileSize, createdAt: a.createdAt.toISOString()
-        })),
-        submissions: t.submissions.map((s) => ({
-          id: s.id,
-          roundNumber: s.roundNumber,
-          submittedAt: s.submittedAt.toISOString(),
-          submissionNote: s.submissionNote,
-          outcome: s.outcome,
-          reviewedAt: s.reviewedAt?.toISOString() ?? null,
-          reviewComment: s.reviewComment,
-          submittedBy: s.submittedBy,
-          reviewedBy: s.reviewedBy,
-          attachments: s.attachments.map((a) => ({
-            id: a.id, fileKey: a.fileKey, fileName: a.fileName,
-            mimeType: a.mimeType, fileSize: a.fileSize, createdAt: a.createdAt.toISOString()
-          }))
-        }))
+        attachments: [],
+        submissions: []
       }))}
       members={members}
       seniors={seniors}

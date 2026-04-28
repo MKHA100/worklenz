@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
-import { publishRealtimeEvent } from "@/lib/realtime/publish";
+import { publishRealtimeEvent, publishRealtimeEventToUsers } from "@/lib/realtime/publish";
 import { requireUserProfile } from "@/lib/users/profile";
+import { getProjectAffectedUserIds } from "@/lib/realtime/affected-users";
 
 type RouteContext = { params: Promise<{ taskId: string }> };
 
@@ -74,11 +75,30 @@ export async function POST(req: Request, { params }: RouteContext) {
     }
   });
 
-  void publishRealtimeEvent({
-    channel: `project:${updated.projectId}`,
-    event: "task_submission_changed",
-    payload: { taskId: updated.id, projectId: updated.projectId, actorUserId: profile.id }
-  });
+  void (async () => {
+    const affectedUserIds = await getProjectAffectedUserIds(updated.projectId, [
+      profile.id,
+      updated.assigneeId,
+      updated.reviewerId
+    ]);
+    const payload = {
+      taskId: updated.id,
+      projectId: updated.projectId,
+      affectedUserIds,
+      actorUserId: profile.id,
+      changeType: "submission_changed" as const,
+      outcome: "SUBMITTED"
+    };
+
+    await Promise.allSettled([
+      publishRealtimeEvent({
+        channel: `project:${updated.projectId}`,
+        event: "task.submission.changed",
+        payload
+      }),
+      publishRealtimeEventToUsers(affectedUserIds, "task.submission.changed", payload)
+    ]);
+  })();
 
   return NextResponse.json({ task: updated, submission: submissionFull });
 }

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { requireUserProfile } from "@/lib/users/profile";
 import { isOneOfRoles } from "@/lib/auth/roles";
+import { publishRealtimeEvent, publishRealtimeEventToUsers } from "@/lib/realtime/publish";
+import { getProjectAffectedUserIds } from "@/lib/realtime/affected-users";
 
 type RouteContext = { params: Promise<{ projectId: string }> };
 
@@ -40,6 +42,26 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     include: { user: { select: { id: true, fullName: true, email: true, role: true } } }
   });
 
+  void (async () => {
+    const affectedUserIds = await getProjectAffectedUserIds(projectId, [profile.id, body.userId]);
+    const payload = {
+      projectId,
+      affectedUserIds,
+      actorUserId: profile.id,
+      targetUserId: body.userId,
+      changeType: "project_members_changed" as const,
+      action: "added" as const
+    };
+    await Promise.allSettled([
+      publishRealtimeEvent({
+        channel: `project:${projectId}`,
+        event: "project.members.changed",
+        payload
+      }),
+      publishRealtimeEventToUsers(affectedUserIds, "project.members.changed", payload)
+    ]);
+  })();
+
   return NextResponse.json({ member: { ...member.user, addedAt: member.addedAt } }, { status: 201 });
 }
 
@@ -62,5 +84,26 @@ export async function DELETE(req: NextRequest, { params }: RouteContext) {
   }
 
   await prisma.projectMember.deleteMany({ where: { projectId, userId } });
+
+  void (async () => {
+    const affectedUserIds = await getProjectAffectedUserIds(projectId, [profile.id, userId]);
+    const payload = {
+      projectId,
+      affectedUserIds,
+      actorUserId: profile.id,
+      targetUserId: userId,
+      changeType: "project_members_changed" as const,
+      action: "removed" as const
+    };
+    await Promise.allSettled([
+      publishRealtimeEvent({
+        channel: `project:${projectId}`,
+        event: "project.members.changed",
+        payload
+      }),
+      publishRealtimeEventToUsers(affectedUserIds, "project.members.changed", payload)
+    ]);
+  })();
+
   return NextResponse.json({ ok: true });
 }

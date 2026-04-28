@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { requireUserProfile } from "@/lib/users/profile";
-import { publishRealtimeEvent } from "@/lib/realtime/publish";
+import { publishRealtimeEvent, publishRealtimeEventToUsers } from "@/lib/realtime/publish";
+import { getProjectAffectedUserIds } from "@/lib/realtime/affected-users";
 
 type RouteContext = { params: Promise<{ taskId: string }> };
 
@@ -32,11 +33,25 @@ export async function POST(req: Request, { params }: RouteContext) {
     }
   });
 
-  void publishRealtimeEvent({
-    channel: `project:${task.projectId}`,
-    event: "task_attachment_changed",
-    payload: { taskId, projectId: task.projectId, action: "added" }
-  });
+  void (async () => {
+    const affectedUserIds = await getProjectAffectedUserIds(task.projectId, [profile.id]);
+    const payload = {
+      taskId,
+      projectId: task.projectId,
+      affectedUserIds,
+      actorUserId: profile.id,
+      changeType: "attachment_changed" as const,
+      action: "added" as const
+    };
+    await Promise.allSettled([
+      publishRealtimeEvent({
+        channel: `project:${task.projectId}`,
+        event: "task.attachment.changed",
+        payload
+      }),
+      publishRealtimeEventToUsers(affectedUserIds, "task.attachment.changed", payload)
+    ]);
+  })();
 
   return NextResponse.json({ attachment }, { status: 201 });
 }
@@ -63,11 +78,25 @@ export async function DELETE(req: Request, { params }: RouteContext) {
   await prisma.taskAttachment.delete({ where: { id: attachmentId } });
 
   if (task) {
-    void publishRealtimeEvent({
-      channel: `project:${task.projectId}`,
-      event: "task_attachment_changed",
-      payload: { taskId, projectId: task.projectId, action: "removed" }
-    });
+    void (async () => {
+      const affectedUserIds = await getProjectAffectedUserIds(task.projectId, [profile.id]);
+      const payload = {
+        taskId,
+        projectId: task.projectId,
+        affectedUserIds,
+        actorUserId: profile.id,
+        changeType: "attachment_changed" as const,
+        action: "removed" as const
+      };
+      await Promise.allSettled([
+        publishRealtimeEvent({
+          channel: `project:${task.projectId}`,
+          event: "task.attachment.changed",
+          payload
+        }),
+        publishRealtimeEventToUsers(affectedUserIds, "task.attachment.changed", payload)
+      ]);
+    })();
   }
 
   return NextResponse.json({ ok: true });
