@@ -160,6 +160,37 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
   const canManageMembers = MANAGER_ROLES.includes(userRole);
   const isManager = MANAGER_ROLES.includes(userRole);
 
+  // State declarations must come before useQuery hooks that reference them
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [addMemberId, setAddMemberId] = useState<string | undefined>(undefined);
+  const [addingMember, setAddingMember] = useState(false);
+  const [editTradeCode, setEditTradeCode] = useState("");
+  const [editUnit, setEditUnit] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editDueDate, setEditDueDate] = useState<dayjs.Dayjs | null>(null);
+  const [editStartDate, setEditStartDate] = useState<dayjs.Dayjs | null>(null);
+  const [editTimeEstimate, setEditTimeEstimate] = useState<number | null>(null);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [reviewComment, setReviewComment] = useState("");
+  const [submissionNote, setSubmissionNote] = useState("");
+  const [selectedReviewerId, setSelectedReviewerId] = useState<string | undefined>(undefined);
+  const [submitting, setSubmitting] = useState(false);
+  const [noteFileList, setNoteFileList] = useState<UploadFile[]>([]);
+  const [savingNote, setSavingNote] = useState(false);
+  const [form] = Form.useForm();
+  const [fileList, setFileList] = useState<UploadFile[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [timerRunning, setTimerRunning] = useState(false);
+  const [timerTaskId, setTimerTaskId] = useState<string | null>(null);
+  const [timerSessionSec, setTimerSessionSec] = useState(0);
+  const [timerStartedAt, setTimerStartedAt] = useState<Date | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasRealtimeSyncedRef = useRef(false);
+  const timerSessionSecRef = useRef(0);
+
   const { data: tasks = initialTasks } = useQuery({
     queryKey: QK.projectTasks(project.id),
     queryFn: () => fetchProjectTasks(project.id),
@@ -197,44 +228,14 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
     },
     onError: () => message.error("Update failed"),
   });
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [addMemberId, setAddMemberId] = useState<string | undefined>(undefined);
-  const [addingMember, setAddingMember] = useState(false);
-  const [editTradeCode, setEditTradeCode] = useState("");
-  const [editUnit, setEditUnit] = useState("");
-  const [editDescription, setEditDescription] = useState("");
-  const [editDueDate, setEditDueDate] = useState<dayjs.Dayjs | null>(null);
-  const [editStartDate, setEditStartDate] = useState<dayjs.Dayjs | null>(null);
-  const [editTimeEstimate, setEditTimeEstimate] = useState<number | null>(null);
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [reviewComment, setReviewComment] = useState("");
-  const [submissionNote, setSubmissionNote] = useState("");
-  const [selectedReviewerId, setSelectedReviewerId] = useState<string | undefined>(undefined);
-  const [submitting, setSubmitting] = useState(false);
-  const [noteFileList, setNoteFileList] = useState<UploadFile[]>([]);
-  const [savingNote, setSavingNote] = useState(false);
-  const [form] = Form.useForm();
-  const [fileList, setFileList] = useState<UploadFile[]>([]);
-  const [uploadingFiles, setUploadingFiles] = useState(false);
 
-  // Timer state
-  const [timerRunning, setTimerRunning] = useState(false);
-  const [timerTaskId, setTimerTaskId] = useState<string | null>(null);
-  const [timerSessionSec, setTimerSessionSec] = useState(0);
-  const [timerStartedAt, setTimerStartedAt] = useState<Date | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const hasRealtimeSyncedRef = useRef(false);
-  const timerSessionSecRef = useRef(0);
+  // Timer effects
   useEffect(() => { timerSessionSecRef.current = timerSessionSec; }, [timerSessionSec]);
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
-
 
   // Realtime: invalidate cache to trigger background refetch
   useProjectEvents(project.id, (event) => {
