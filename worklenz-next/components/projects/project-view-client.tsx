@@ -656,12 +656,9 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
             <Text type="secondary" style={{ fontSize: 12 }}>{completion}% complete</Text>
           </Flex>
         </div>
-        <Space>
-          <Button icon={<SyncOutlined />} onClick={handleRefresh} loading={isRefreshing} />
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-            Add Task
-          </Button>
-        </Space>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
+          Add Task
+        </Button>
       </Flex>
 
       <Tabs defaultActiveKey="list" items={[
@@ -706,8 +703,8 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
                               )}
                             </Flex>
                             {(() => {
-                              const users = t.taskMemberUsers.length > 0 ? t.taskMemberUsers : t.assignee ? [t.assignee] : [];
-                              return users.length > 0 ? (
+                              const users = (t.taskMemberUsers?.length ?? 0) > 0 ? t.taskMemberUsers : t.assignee ? [t.assignee] : [];
+                              return users?.length > 0 ? (
                                 <Flex gap={4} align="center" style={{ marginTop: 4 }}>
                                   <UserAvatar user={users[0]} size={18} />
                                   <Text type="secondary" style={{ fontSize: 11 }}>{users[0].fullName ?? users[0].email}</Text>
@@ -808,7 +805,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
         {selectedTask && (
           <div>
             {/* Description */}
-            {selectedTask.description && !selectedTask.requiresReview === false && (
+            {selectedTask.description && (
               <>
                 <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Description</Text>
                 <Paragraph style={{ marginTop: 4 }}>{selectedTask.description}</Paragraph>
@@ -820,14 +817,14 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
             <Descriptions column={1} size="small" style={{ marginBottom: 12 }}>
               <Descriptions.Item label="Assignee">
                 <Flex gap={6} align="center">
-                  {(selectedTask.taskMemberUsers.length > 0 ? selectedTask.taskMemberUsers : selectedTask.assignee ? [selectedTask.assignee] : [])
+                  {((selectedTask.taskMemberUsers?.length ?? 0) > 0 ? selectedTask.taskMemberUsers : selectedTask.assignee ? [selectedTask.assignee] : [])
                     .map((u) => (
                       <Tooltip key={u.id} title={u.fullName ?? u.email}>
                         <UserAvatar user={u} size={22} />
                       </Tooltip>
                     ))}
                   <Text>
-                    {selectedTask.taskMemberUsers.length > 0
+                    {(selectedTask.taskMemberUsers?.length ?? 0) > 0
                       ? selectedTask.taskMemberUsers.map((u) => u.fullName ?? u.email).join(", ")
                       : selectedTask.assignee ? (selectedTask.assignee.fullName ?? selectedTask.assignee.email) : "Unassigned"}
                   </Text>
@@ -990,9 +987,9 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
                 </div>
 
                 {/* Existing attachments */}
-                {selectedTask.attachments.length > 0 && (
+                {(selectedTask.attachments?.length ?? 0) > 0 && (
                   <Flex vertical gap={4} style={{ marginTop: 8 }}>
-                    {selectedTask.attachments.map((a) => (
+                    {selectedTask.attachments?.map((a) => (
                       <Flex key={a.id} justify="space-between" align="center"
                         style={{ background: "#e6f4ff", padding: "4px 8px", borderRadius: 4 }}>
                         <Flex gap={6} align="center">
@@ -1029,7 +1026,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
             )}
 
             {/* Submission history */}
-            {selectedTask.submissions.length > 0 && (
+            {(selectedTask.submissions?.length ?? 0) > 0 && (
               <>
                 <Divider />
                 <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>Submission History</Text>
