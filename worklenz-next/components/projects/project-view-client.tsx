@@ -527,8 +527,8 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
             style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 500, fontSize: 14, color: "#262626", textAlign: "left", padding: 0 }}>
             {title}
           </button>
-          {record.attachments.length > 0 && (
-            <Tooltip title={`${record.attachments.length} attachment${record.attachments.length > 1 ? "s" : ""}`}>
+          {(record.attachments?.length ?? 0) > 0 && (
+            <Tooltip title={`${record.attachments?.length} attachment${(record.attachments?.length ?? 0) > 1 ? "s" : ""}`}>
               <PaperClipOutlined style={{ color: "#8c8c8c", fontSize: 13 }} />
             </Tooltip>
           )}
@@ -571,8 +571,8 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
     {
       title: "Assignees", key: "assignee", width: 180,
       render: (_, record) => {
-        const users = record.taskMemberUsers.length > 0 ? record.taskMemberUsers : record.assignee ? [record.assignee] : [];
-        if (users.length === 0) return <Text type="secondary" style={{ fontStyle: "italic" }}>Unassigned</Text>;
+        const users = (record.taskMemberUsers?.length ?? 0) > 0 ? record.taskMemberUsers : record.assignee ? [record.assignee] : [];
+        if ((users?.length ?? 0) === 0) return <Text type="secondary" style={{ fontStyle: "italic" }}>Unassigned</Text>;
         return (
           <Flex gap={4} align="center" wrap="wrap">
             {users.map((u) => (
@@ -714,7 +714,7 @@ export function ProjectViewClient({ userRole, project, initialTasks, members: in
                             })()}
                             <Flex gap={4} wrap style={{ marginTop: 4 }}>
                               {t.revisionCount > 0 && <Tag color="orange" style={{ fontSize: 10 }}>{t.revisionCount} rev</Tag>}
-                              {t.attachments.length > 0 && <Tag icon={<PaperClipOutlined />} style={{ fontSize: 10 }}>{t.attachments.length}</Tag>}
+                              {(t.attachments?.length ?? 0) > 0 && <Tag icon={<PaperClipOutlined />} style={{ fontSize: 10 }}>{t.attachments?.length}</Tag>}
                               {timerRunning && timerTaskId === t.id && <Tag color="blue" style={{ fontSize: 10 }}>⏱</Tag>}
                               {!t.requiresReview && <Tag color="purple" style={{ fontSize: 10 }}>NOTE</Tag>}
                             </Flex>
